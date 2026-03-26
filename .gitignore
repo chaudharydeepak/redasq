@@ -1,0 +1,3 @@
+prompt-guard
+*.db
+.prompt-guard/
