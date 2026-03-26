@@ -22,7 +22,6 @@ var targetSuffixes = []string{
 	"api.anthropic.com",
 	"api.githubcopilot.com",
 	"copilot-proxy.githubusercontent.com",
-	"api.github.com",
 	".githubcopilot.com",
 	".openai.com",
 	".anthropic.com",
@@ -178,23 +177,29 @@ func (p *proxy) inspectAndStore(req *http.Request, host string, body []byte) {
 		return
 	}
 	prompts := ExtractPrompts(body)
-	for _, prompt := range prompts {
-		matches := p.eng.Inspect(prompt)
-		if len(matches) == 0 {
-			continue
-		}
-		err := p.db.SaveFlag(store.FlaggedPrompt{
-			Timestamp: time.Now(),
-			Host:      stripPort(host),
-			Path:      req.URL.Path,
-			Prompt:    prompt,
-			Matches:   matches,
-		})
-		if err != nil {
-			log.Printf("store: %v", err)
-		} else {
-			log.Printf("FLAG: %s%s — %d rule(s) hit", stripPort(host), req.URL.Path, len(matches))
-		}
+	if len(prompts) == 0 {
+		return
+	}
+
+	// Join all message contents into one string so we get a single flag entry
+	// per HTTP request rather than one per message in the conversation history.
+	combined := strings.Join(prompts, "\n\n")
+	matches := p.eng.Inspect(combined)
+	if len(matches) == 0 {
+		return
+	}
+
+	err := p.db.SaveFlag(store.FlaggedPrompt{
+		Timestamp: time.Now(),
+		Host:      stripPort(host),
+		Path:      req.URL.Path,
+		Prompt:    combined,
+		Matches:   matches,
+	})
+	if err != nil {
+		log.Printf("store: %v", err)
+	} else {
+		log.Printf("FLAG: %s%s — %d rule(s) hit", stripPort(host), req.URL.Path, len(matches))
 	}
 }
 
