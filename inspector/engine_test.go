@@ -209,8 +209,8 @@ func TestInspect_CreditCard(t *testing.T) {
 
 func TestRedactText_JWT(t *testing.T) {
 	eng := New()
-	// Minimal valid JWT: header.payload.signature, header+payload must start with eyJ
-	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+	// Minimal valid JWT shape: header.payload.signature, header+payload must start with eyJ
+	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0dXNlciJ9.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	redacted, matches := eng.RedactText("token: " + jwt)
 	if len(matches) == 0 {
 		t.Error("jwt: expected match, got none")
