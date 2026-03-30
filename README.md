@@ -115,13 +115,6 @@ claude
 
 To avoid setting these every session, add them to your `~/.zshrc` (or `~/.bashrc`).
 
-### Using with curl / scripts
-
-```bash
-curl --proxy http://localhost:8080 https://api.openai.com/v1/chat/completions \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}'
-```
 
 ## Customizing Rules
 
