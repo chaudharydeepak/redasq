@@ -1,20 +1,22 @@
 # Prompt Guard
 
-A lightweight HTTPS MITM proxy that intercepts prompts sent to AI coding assistants and APIs — flagging sensitive data before it leaves your machine.
+A lightweight HTTPS MITM proxy that intercepts prompts sent to AI coding assistants and APIs — blocking or redacting sensitive data before it leaves your machine.
 
 ![Prompt Guard demo](demo.gif)
 
 ## Why
 
-AI tools like GitHub Copilot, ChatGPT, and Claude receive your full editor context. That context can contain API keys, passwords, SSNs, internal IP addresses, and other secrets — sent to third-party servers without you noticing. Prompt Guard sits between your tools and the AI APIs, inspects every prompt in real time, and alerts you when something sensitive is about to be sent.
+AI tools like GitHub Copilot, ChatGPT, and Claude receive your full editor context. That context can contain API keys, passwords, SSNs, internal IP addresses, and other secrets — sent to third-party servers without you noticing. Prompt Guard sits between your tools and the AI APIs, inspects every prompt in real time, and blocks or redacts sensitive data before it is forwarded.
 
 ## Features
 
 - **HTTPS MITM proxy** — transparent interception using a local CA cert
 - **Real-time inspection** — rules run on every prompt before it's forwarded
-- **Web dashboard** — live feed of flagged prompts with matched snippets
+- **Block mode** — request is rejected; the AI receives a "blocked" message instead
+- **Redact mode** — sensitive value is replaced with `[REDACTED]` before forwarding; the AI still responds
+- **Web dashboard** — live feed of all intercepted prompts with matched snippets and status
 - **12 built-in rules** — credentials, PII, tokens, private keys
-- **Zero prompt blocking** — inspect-only by default, nothing is dropped
+- **Live rule editing** — change rule modes in the dashboard; changes are written back to `rules.json` instantly
 - **SQLite persistence** — full audit log across restarts
 - **Single binary** — no runtime dependencies
 
@@ -32,20 +34,25 @@ All other HTTPS traffic is tunnelled through unchanged.
 
 ## Built-in Rules
 
-| Rule | Severity |
-|---|---|
-| AWS Access Key (`AKIA…`) | High |
-| AWS Secret Key | High |
-| OpenAI API Key (`sk-…`) | High |
-| Anthropic API Key (`sk-ant-…`) | High |
-| GitHub Token (`ghp_`, `gho_`, …) | High |
-| Private Key (PEM block) | High |
-| Social Security Number | High |
-| Credit Card Number | High |
-| JWT Token | Medium |
-| Generic Secret / Password assignment | Medium |
-| Email Address | Low |
-| Internal IP Address (RFC-1918) | Low |
+| Rule | Severity | Default Mode |
+|---|---|---|
+| AWS Access Key (`AKIA…`) | High | Block |
+| AWS Secret Key | High | Block |
+| OpenAI API Key (`sk-…`) | High | Block |
+| Anthropic API Key (`sk-ant-…`) | High | Block |
+| GitHub Token (`ghp_`, `gho_`, …) | High | Block |
+| Private Key (PEM block) | High | Block |
+| Social Security Number | High | Block |
+| Credit Card Number | High | Block |
+| JWT Token | Medium | Track |
+| Generic Secret / Password assignment | Medium | Track |
+| Email Address | Low | Track |
+| Internal IP Address (RFC-1918) | Low | Track |
+
+**Block** — request is rejected; nothing is forwarded to the AI.
+**Track** — matched value is replaced with `[REDACTED]` in the forwarded request; the AI responds to the sanitised prompt.
+
+Rules can be switched between modes at any time from the dashboard without restarting.
 
 ## Requirements
 
@@ -83,9 +90,20 @@ Dashboard:  http://localhost:7778
 Rules file: /Users/you/.prompt-guard/rules.json
 ```
 
+### Using with VS Code Copilot
+
+The most reliable way is to set the proxy directly in VS Code settings (`Cmd+,`):
+
+```json
+"http.proxy": "http://localhost:8080",
+"http.proxyStrictSSL": true
+```
+
+Then restart VS Code. Traffic from all Copilot models (Claude, GPT-4o, etc.) will flow through the proxy.
+
 ### Using with Claude CLI
 
-Node.js ignores the system keychain, so you need one extra env var:
+Node.js ignores the system keychain, so pass the CA cert explicitly:
 
 ```bash
 export NODE_EXTRA_CA_CERTS=~/.prompt-guard/ca.crt
@@ -95,34 +113,7 @@ export NO_PROXY=localhost,127.0.0.1
 claude
 ```
 
-To avoid setting these every time, add them to your `~/.zshrc` (or `~/.bashrc`):
-
-```bash
-export NODE_EXTRA_CA_CERTS=~/.prompt-guard/ca.crt
-export HTTP_PROXY=http://localhost:8080
-export HTTPS_PROXY=http://localhost:8080
-export NO_PROXY=localhost,127.0.0.1
-```
-
-Then open a new terminal and run `claude` as usual.
-
-### Using with VS Code Copilot
-
-Launch VS Code from the same terminal where you exported the proxy env vars:
-
-```bash
-export HTTP_PROXY=http://localhost:8080
-export HTTPS_PROXY=http://localhost:8080
-export NO_PROXY=localhost,127.0.0.1
-code .
-```
-
-Or set the proxy directly in VS Code settings (`Cmd+,`):
-
-```json
-"http.proxy": "http://localhost:8080",
-"http.proxyStrictSSL": true
-```
+To avoid setting these every session, add them to your `~/.zshrc` (or `~/.bashrc`).
 
 ### Using with curl / scripts
 
@@ -134,9 +125,9 @@ curl --proxy http://localhost:8080 https://api.openai.com/v1/chat/completions \
 
 ## Customizing Rules
 
-Rules are configured in `~/.prompt-guard/rules.json`. The file is created automatically when you first change a rule mode in the dashboard. You can also create it manually.
+Rules are configured in `~/.prompt-guard/rules.json`. The file is created automatically when you first change a rule mode in the dashboard. You can also create or edit it manually — changes take effect on the next proxy restart.
 
-**Override a built-in rule** (e.g. upgrade email from track to block):
+**Override a built-in rule** (e.g. switch email from track to block):
 
 ```json
 {
@@ -164,9 +155,7 @@ Rules are configured in `~/.prompt-guard/rules.json`. The file is created automa
 }
 ```
 
-Changes to `rules.json` take effect on the next proxy restart. Changes made in the dashboard are written back to `rules.json` automatically and survive restarts.
-
-Available modes: `block` (request is rejected), `track` (prompt is logged and value is redacted before forwarding).
+Changes made in the dashboard are written back to `rules.json` automatically and survive restarts.
 
 ## Options
 
@@ -185,10 +174,13 @@ Your app (VS Code, curl, etc.)
       ├── Non-target hosts → blind tunnel (unchanged)
       └── Target hosts (OpenAI, Anthropic, Copilot)
             → TLS MITM (local CA cert)
-              → parse JSON body → extract prompt text
-                → run rules → if match: store in SQLite
-                  → forward to real API → return response
-                    → web dashboard (:7778) reads SQLite
+              → parse JSON body → extract user prompt text
+                → run rules
+                  ├── block match  → reject request; return block message to client
+                  ├── track match  → redact value in body; forward sanitised request
+                  └── clean        → forward unchanged
+                → store in SQLite (prompt, status, matched snippets)
+                  → web dashboard (:7778) reads SQLite
 ```
 
 ```
@@ -199,7 +191,7 @@ prompt-guard/
 │   ├── proxy.go         HTTP CONNECT handler, TLS MITM, request forwarding
 │   └── intercept.go     Prompt extraction from OpenAI / Anthropic JSON bodies
 ├── inspector/
-│   ├── engine.go        Rule matching engine
+│   ├── engine.go        Rule matching engine (block, redact, snippet capture)
 │   ├── rules.go         Built-in rules (regex + metadata)
 │   └── config.go        rules.json loading and write-back
 ├── store/
