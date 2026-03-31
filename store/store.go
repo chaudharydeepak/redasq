@@ -158,13 +158,36 @@ func (s *Store) Stats() Stats {
 	return st
 }
 
-// ExportPrompts returns all prompts in chronological order for export.
-// Uses redacted text when available so secrets are never exported.
-func (s *Store) ExportPrompts(limit int) ([]Prompt, error) {
-	rows, err := s.db.Query(
-		`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
-		 FROM prompts ORDER BY timestamp ASC LIMIT ?`, limit,
-	)
+// ExportPrompts returns prompts in chronological order within the given time range.
+// Pass zero values to export all. Secrets are never exported — redacted text is used.
+func (s *Store) ExportPrompts(from, to time.Time) ([]Prompt, error) {
+	var rows *sql.Rows
+	var err error
+	switch {
+	case !from.IsZero() && !to.IsZero():
+		rows, err = s.db.Query(
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			 FROM prompts WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC`,
+			from.Unix(), to.Unix(),
+		)
+	case !from.IsZero():
+		rows, err = s.db.Query(
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			 FROM prompts WHERE timestamp >= ? ORDER BY timestamp ASC`,
+			from.Unix(),
+		)
+	case !to.IsZero():
+		rows, err = s.db.Query(
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			 FROM prompts WHERE timestamp <= ? ORDER BY timestamp ASC`,
+			to.Unix(),
+		)
+	default:
+		rows, err = s.db.Query(
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			 FROM prompts ORDER BY timestamp ASC`,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}

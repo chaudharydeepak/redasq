@@ -171,11 +171,23 @@ func apiStats(w http.ResponseWriter, _ *http.Request, db *store.Store) {
 	jsonResponse(w, db.Stats())
 }
 
-// apiExport writes all prompts as a plain-text file suitable for pasting into
-// an LLM for summarisation and pattern analysis. Secrets are never exported —
-// the redacted version is used when available.
-func apiExport(w http.ResponseWriter, _ *http.Request, db *store.Store) {
-	prompts, err := db.ExportPrompts(10000)
+// apiExport writes prompts as a plain-text file for LLM analysis.
+// Optional query params: from=YYYY-MM-DD, to=YYYY-MM-DD
+// Secrets are never exported — redacted text is used when available.
+func apiExport(w http.ResponseWriter, r *http.Request, db *store.Store) {
+	var from, to time.Time
+	if s := r.URL.Query().Get("from"); s != "" {
+		if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+			from = t
+		}
+	}
+	if s := r.URL.Query().Get("to"); s != "" {
+		if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+			to = t.Add(24*time.Hour - time.Second) // inclusive: end of day
+		}
+	}
+
+	prompts, err := db.ExportPrompts(from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -187,11 +199,19 @@ func apiExport(w http.ResponseWriter, _ *http.Request, db *store.Store) {
 		time.Now().Format("2006-01-02"),
 	))
 
-	stats := db.Stats()
 	fmt.Fprintf(w, "Prompt Guard Export\n")
 	fmt.Fprintf(w, "Generated: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(w, "Total prompts: %d  (clean: %d  redacted: %d  blocked: %d  flagged: %d)\n",
-		stats.Total, stats.Clean, stats.Redacted, stats.Blocked, stats.Flagged)
+	if !from.IsZero() || !to.IsZero() {
+		fromStr, toStr := "beginning", "now"
+		if !from.IsZero() {
+			fromStr = from.Format("2006-01-02")
+		}
+		if !to.IsZero() {
+			toStr = to.Format("2006-01-02")
+		}
+		fmt.Fprintf(w, "Range: %s → %s\n", fromStr, toStr)
+	}
+	fmt.Fprintf(w, "Prompts in export: %d\n", len(prompts))
 	fmt.Fprintf(w, strings.Repeat("-", 72)+"\n\n")
 
 	for i, p := range prompts {
@@ -448,9 +468,33 @@ var dashboardHTML = `<!DOCTYPE html>
   <div class="hd-sep"></div>
   <div class="hd-meta" id="meta">connecting…</div>
   <div class="hd-spacer"></div>
-  <a href="/api/export" download class="icon-btn" title="Export prompts for LLM analysis" style="text-decoration:none">⬇</a>
+  <button class="icon-btn" onclick="toggleExport()" title="Export prompts" id="export-btn">⬇</button>
   <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme" id="theme-btn">☀</button>
 </header>
+
+<div id="export-panel" style="display:none;position:fixed;top:52px;right:12px;z-index:100;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;
+  padding:16px;width:280px;box-shadow:0 8px 24px rgba(0,0,0,.3);">
+  <div style="font-weight:600;font-size:13px;margin-bottom:12px">Export for LLM analysis</div>
+  <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+    <button class="ftab" onclick="doExport('today')">Today</button>
+    <button class="ftab" onclick="doExport('7d')">Last 7 days</button>
+    <button class="ftab" onclick="doExport('30d')">Last 30 days</button>
+    <button class="ftab" onclick="doExport('all')">All time</button>
+  </div>
+  <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">Custom range</div>
+  <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+    <input type="date" id="exp-from" style="flex:1;background:var(--bg-input);border:1px solid var(--border);
+      border-radius:5px;padding:4px 7px;color:var(--text-1);font-size:11.5px">
+    <span style="color:var(--text-3);font-size:11px">→</span>
+    <input type="date" id="exp-to" style="flex:1;background:var(--bg-input);border:1px solid var(--border);
+      border-radius:5px;padding:4px 7px;color:var(--text-1);font-size:11.5px">
+  </div>
+  <button class="ftab" style="width:100%" onclick="doExport('custom')">Download</button>
+  <div style="margin-top:10px;font-size:10.5px;color:var(--text-3);line-height:1.5">
+    Plain text file. Paste into any LLM to analyse your usage patterns.
+  </div>
+</div>
 
 <main class="pg-main">
 
@@ -712,6 +756,49 @@ async function setMode(ruleID, mode, btn) {
 refresh();
 loadRules();
 setInterval(refresh, 3000);
+
+function toggleExport() {
+  var p = document.getElementById('export-panel');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+function doExport(preset) {
+  var from = '', to = '';
+  var now = new Date();
+  var pad = function(n){ return String(n).padStart(2,'0'); };
+  var fmt = function(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); };
+
+  if (preset === 'today') {
+    from = fmt(now); to = fmt(now);
+  } else if (preset === '7d') {
+    var d = new Date(now); d.setDate(d.getDate()-6);
+    from = fmt(d); to = fmt(now);
+  } else if (preset === '30d') {
+    var d = new Date(now); d.setDate(d.getDate()-29);
+    from = fmt(d); to = fmt(now);
+  } else if (preset === 'custom') {
+    from = document.getElementById('exp-from').value;
+    to   = document.getElementById('exp-to').value;
+  }
+
+  var url = '/api/export';
+  var params = [];
+  if (from) params.push('from='+from);
+  if (to)   params.push('to='+to);
+  if (params.length) url += '?' + params.join('&');
+
+  window.location.href = url;
+  document.getElementById('export-panel').style.display = 'none';
+}
+
+// Close export panel when clicking outside
+document.addEventListener('click', function(e) {
+  var panel = document.getElementById('export-panel');
+  var btn   = document.getElementById('export-btn');
+  if (panel.style.display !== 'none' && !panel.contains(e.target) && e.target !== btn) {
+    panel.style.display = 'none';
+  }
+});
 </script>
 </body>
 </html>
