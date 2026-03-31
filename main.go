@@ -20,7 +20,10 @@ func main() {
 	webPort       := flag.Int("web-port", 7778, "Web dashboard port")
 	caDir         := flag.String("ca-dir", defaultCADir(), "Directory for CA cert/key and database")
 	upstreamProxy := flag.String("upstream-proxy", "", "Corporate proxy to route outbound traffic through (e.g. http://proxy.corp.com:8080)")
+	debug         := flag.Bool("debug", false, "Enable verbose request/connection logging")
 	flag.Parse()
+
+	proxy.Debug = *debug
 
 	if err := os.MkdirAll(*caDir, 0700); err != nil {
 		log.Fatalf("mkdir %s: %v", *caDir, err)

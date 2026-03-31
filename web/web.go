@@ -36,7 +36,7 @@ func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) 
 	})
 	mux.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Cache-Control", "no-cache")
 		fmt.Fprint(w, logoSVG)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -53,11 +53,27 @@ func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) 
 
 func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 	statusFilter := r.URL.Query().Get("status")
-	prompts, err := db.ListPrompts(statusFilter, 500)
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if perPage < 1 || perPage > 200 {
+		perPage = 25
+	}
+	offset := (page - 1) * perPage
+
+	total, err := db.CountPrompts(statusFilter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	prompts, err := db.ListPrompts(statusFilter, perPage, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	type row struct {
 		ID             int64             `json:"id"`
 		Time           string            `json:"time"`
@@ -97,7 +113,13 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 			RedactedPrompt: truncate(p.RedactedPrompt, 400),
 		})
 	}
-	jsonResponse(w, out)
+	type response struct {
+		Items   []row `json:"items"`
+		Total   int   `json:"total"`
+		Page    int   `json:"page"`
+		PerPage int   `json:"per_page"`
+	}
+	jsonResponse(w, response{Items: out, Total: total, Page: page, PerPage: perPage})
 }
 
 func apiPromptDetail(w http.ResponseWriter, r *http.Request, db *store.Store) {
@@ -393,6 +415,15 @@ var dashboardHTML = `<!DOCTYPE html>
   .pg-tbl .muted { color: var(--text-3); }
   .pg-tbl .mono  { font-family: 'SF Mono','Fira Code',Menlo,monospace; font-size: 11px; }
   .pg-tbl .empty td { color: var(--text-3); text-align: center; padding: 36px; cursor: default; }
+  .pagination { display:flex; align-items:center; gap:6px; padding:10px 16px;
+                border-top:1px solid var(--border); font-size:12px; color:var(--text-2); }
+  .pagination .pg-info { flex:1; }
+  .pg-btn { background:var(--bg-raised); border:1px solid var(--border); color:var(--text-1);
+            padding:3px 10px; border-radius:5px; cursor:pointer; font-size:12px; }
+  .pg-btn:disabled { opacity:.35; cursor:default; }
+  .pg-btn:not(:disabled):hover { border-color:var(--accent); }
+  .pg-select { background:var(--bg-raised); border:1px solid var(--border); color:var(--text-1);
+               padding:3px 6px; border-radius:5px; font-size:12px; cursor:pointer; }
   .pg-tbl tr.row-blocked  td { background: var(--blocked-bg); }
   .pg-tbl tr.row-flagged  td { background: var(--flagged-bg); }
   .pg-tbl tr.row-redacted td { background: var(--redacted-bg); }
@@ -567,6 +598,16 @@ var dashboardHTML = `<!DOCTYPE html>
             </tbody>
           </table>
         </div>
+        <div class="pagination">
+          <span class="pg-info" id="pg-info"></span>
+          <button class="pg-btn" id="pg-prev" onclick="goPage(currentPage-1)" disabled>&#8592; Prev</button>
+          <button class="pg-btn" id="pg-next" onclick="goPage(currentPage+1)" disabled>Next &#8594;</button>
+          <select class="pg-select" id="pg-size" onchange="setPageSize(+this.value)">
+            <option value="25">25 / page</option>
+            <option value="50">50 / page</option>
+            <option value="100">100 / page</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -586,7 +627,9 @@ var dashboardHTML = `<!DOCTYPE html>
 
 <script>
 var currentFilter = 'all';
-var openRow = null;
+var currentPage   = 1;
+var pageSize      = 25;
+var openRow       = null;
 
 function toggleTheme() {
   var html = document.documentElement;
@@ -609,9 +652,23 @@ function modeTag(m)   { return '<span class="mm mm-'+esc(m)+'">'+esc(m)+'</span>
 
 function setFilter(f, btn) {
   currentFilter = f;
-  lastTopId = null; // force re-render for new filter
+  currentPage   = 1;
+  lastTopId     = null;
   document.querySelectorAll('.ftab').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
+  refresh();
+}
+
+function goPage(p) {
+  currentPage = p;
+  lastTopId   = null;
+  refresh();
+}
+
+function setPageSize(n) {
+  pageSize    = n;
+  currentPage = 1;
+  lastTopId   = null;
   refresh();
 }
 
@@ -675,10 +732,15 @@ var lastTopId = null;
 
 async function refresh() {
   try {
-    var url = '/api/prompts'+(currentFilter !== 'all' ? '?status='+currentFilter : '');
-    var [pr, sr] = await Promise.all([fetch(url), fetch('/api/stats')]);
-    var prompts = await pr.json();
-    var stats   = await sr.json();
+    var qs = '?page='+currentPage+'&per_page='+pageSize+(currentFilter !== 'all' ? '&status='+currentFilter : '');
+    var [pr, sr] = await Promise.all([fetch('/api/prompts'+qs), fetch('/api/stats')]);
+    var data  = await pr.json();
+    var stats = await sr.json();
+
+    var prompts  = data.items  || [];
+    var total    = data.total  || 0;
+    var totalPages = Math.max(1, Math.ceil(total / pageSize));
+    if (currentPage > totalPages) { currentPage = totalPages; }
 
     document.getElementById('meta').textContent = new Date().toLocaleTimeString();
     document.getElementById('tile-total').textContent    = stats.total    || 0;
@@ -687,10 +749,17 @@ async function refresh() {
     document.getElementById('tile-redacted').textContent = stats.redacted || 0;
     document.getElementById('tile-blocked').textContent  = stats.blocked  || 0;
     document.getElementById('tile-host').textContent     = stats.most_flagged_host || '—';
-    document.getElementById('prompt-count').textContent  = prompts.length;
+    document.getElementById('prompt-count').textContent  = total;
+
+    // Pagination controls
+    var start = (currentPage-1)*pageSize+1;
+    var end   = Math.min(currentPage*pageSize, total);
+    document.getElementById('pg-info').textContent = total === 0 ? '' : start+'-'+end+' of '+total;
+    document.getElementById('pg-prev').disabled = currentPage <= 1;
+    document.getElementById('pg-next').disabled = currentPage >= totalPages;
 
     var newTopId = prompts.length > 0 ? prompts[0].id : null;
-    if (newTopId === lastTopId) return; // nothing new — leave DOM untouched
+    if (newTopId === lastTopId && currentPage > 1) return; // stable inner page — skip re-render
     lastTopId = newTopId;
 
     window._promptData = {};

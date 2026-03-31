@@ -83,19 +83,30 @@ func (s *Store) SavePrompt(p Prompt) error {
 	return err
 }
 
-func (s *Store) ListPrompts(statusFilter string, limit int) ([]Prompt, error) {
+func (s *Store) CountPrompts(statusFilter string) (int, error) {
+	var n int
+	var err error
+	if statusFilter == "" || statusFilter == "all" {
+		err = s.db.QueryRow(`SELECT COUNT(*) FROM prompts`).Scan(&n)
+	} else {
+		err = s.db.QueryRow(`SELECT COUNT(*) FROM prompts WHERE status = ?`, statusFilter).Scan(&n)
+	}
+	return n, err
+}
+
+func (s *Store) ListPrompts(statusFilter string, limit, offset int) ([]Prompt, error) {
 	var rows *sql.Rows
 	var err error
 	if statusFilter == "" || statusFilter == "all" {
 		rows, err = s.db.Query(
 			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
-			 FROM prompts ORDER BY timestamp DESC LIMIT ?`, limit,
+			 FROM prompts ORDER BY timestamp DESC LIMIT ? OFFSET ?`, limit, offset,
 		)
 	} else {
 		rows, err = s.db.Query(
 			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
-			 FROM prompts WHERE status = ? ORDER BY timestamp DESC LIMIT ?`,
-			statusFilter, limit,
+			 FROM prompts WHERE status = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
+			statusFilter, limit, offset,
 		)
 	}
 	if err != nil {

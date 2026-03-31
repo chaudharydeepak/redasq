@@ -19,6 +19,15 @@ import (
 	"github.com/chaudharydeepak/prompt-guard/store"
 )
 
+// Debug enables verbose request/connection logging. Set from main via --debug flag.
+var Debug bool
+
+func debugf(format string, args ...any) {
+	if Debug {
+		log.Printf(format, args...)
+	}
+}
+
 // targetSuffixes are hostname suffixes we intercept.
 var targetSuffixes = []string{
 	"api.openai.com",
@@ -58,7 +67,7 @@ func Start(port int, ca *CA, db *store.Store, eng *inspector.Engine, upstreamPro
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: p,
 	}
-	log.Printf("proxy: listening on :%d", port)
+	debugf("proxy: listening on :%d", port)
 	return srv.ListenAndServe()
 }
 
@@ -86,10 +95,10 @@ func (p *proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(clientConn, "HTTP/1.1 200 Connection established\r\n\r\n")
 
 	if isTarget(r.Host) {
-		log.Printf("CONNECT %s (intercepting)", r.Host)
+		debugf("CONNECT %s (intercepting)", r.Host)
 		p.mitm(clientConn, r.Host)
 	} else {
-		log.Printf("CONNECT %s (tunnelling)", r.Host)
+		debugf("CONNECT %s (tunnelling)", r.Host)
 		p.tunnel(clientConn, r.Host)
 	}
 }
@@ -136,17 +145,17 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 			req.Body = io.NopCloser(bytes.NewReader(body))
 		}
 
-		log.Printf("REQUEST: %s %s%s body=%d bytes stream=%v", req.Method, stripPort(hostport), req.URL.Path, len(body), IsStreaming(body))
+		debugf("REQUEST: %s %s%s body=%d bytes stream=%v", req.Method, stripPort(hostport), req.URL.Path, len(body), IsStreaming(body))
 		prompts := ExtractPrompts(body)
 		displayPrompt := ExtractUserQuery(body)
-		log.Printf("EXTRACTED: %d prompt(s)", len(prompts))
-		log.Printf("  query: %.120s", displayPrompt)
-		if len(prompts) == 0 && len(body) > 0 && len(body) < 4096 && (body[0] == '{' || body[0] == '[') {
+		debugf("EXTRACTED: %d prompt(s)", len(prompts))
+		debugf("  query: %.120s", displayPrompt)
+		if Debug && len(prompts) == 0 && len(body) > 0 && len(body) < 4096 && (body[0] == '{' || body[0] == '[') {
 			end := 2000
 			if len(body) < end {
 				end = len(body)
 			}
-			log.Printf("BODY SAMPLE: %s", string(body[:end]))
+			debugf("BODY SAMPLE: %s", string(body[:end]))
 		}
 
 		// Redact track-mode matches from the full inspection text, then
@@ -324,7 +333,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 	}
 	redactedDisplay, _ := p.eng.RedactText(storedPrompt)
 
-	log.Printf("STORE: status=%s host=%s rules=%d", status, stripPort(host), len(allMatches))
+	debugf("STORE: status=%s host=%s rules=%d", status, stripPort(host), len(allMatches))
 	err := p.db.SavePrompt(store.Prompt{
 		Timestamp:      time.Now(),
 		Host:           stripPort(host),
