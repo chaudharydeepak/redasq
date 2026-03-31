@@ -73,7 +73,7 @@ var BuiltinRules = []Rule{
 		ID:          "github-token",
 		Name:        "GitHub Token",
 		Description: "GitHub personal access / OAuth / app token",
-		Pattern:     regexp.MustCompile(`gh[pousr]_[a-zA-Z0-9]{36,}`),
+		Pattern:     regexp.MustCompile(`gh[pousr]_[a-zA-Z0-9]{36,}|github_pat_[a-zA-Z0-9_]{82,}`),
 		Severity:    SeverityHigh,
 		Mode:        ModeBlock,
 		Replacement: "[REDACTED]",

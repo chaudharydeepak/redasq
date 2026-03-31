@@ -226,20 +226,58 @@ func apiExport(w http.ResponseWriter, r *http.Request, db *store.Store) {
 		time.Now().Format("2006-01-02"),
 	))
 
-	fmt.Fprintf(w, "Prompt Guard Export\n")
-	fmt.Fprintf(w, "Generated: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	if !from.IsZero() || !to.IsZero() {
-		fromStr, toStr := "beginning", "now"
-		if !from.IsZero() {
-			fromStr = from.Format("2006-01-02")
+	// Count blocked/redacted for context in the system prompt
+	blocked, redacted := 0, 0
+	for _, p := range prompts {
+		switch p.Status {
+		case store.StatusBlocked:
+			blocked++
+		case store.StatusRedacted:
+			redacted++
 		}
-		if !to.IsZero() {
-			toStr = to.Format("2006-01-02")
-		}
-		fmt.Fprintf(w, "Range: %s → %s\n", fromStr, toStr)
 	}
-	fmt.Fprintf(w, "Prompts in export: %d\n", len(prompts))
-	fmt.Fprintf(w, strings.Repeat("-", 72)+"\n\n")
+
+	fromStr, toStr := "beginning", "now"
+	if !from.IsZero() {
+		fromStr = from.Format("2006-01-02")
+	}
+	if !to.IsZero() {
+		toStr = to.Format("2006-01-02")
+	}
+
+	fmt.Fprintf(w, `You are analyzing a developer's AI coding assistant usage log captured by Prompt Guard,
+a local HTTPS proxy that intercepts prompts sent to AI services (GitHub Copilot, OpenAI, Anthropic).
+Sensitive values (API keys, passwords, PII) have been replaced with [REDACTED] before this export.
+
+This export covers %s → %s and contains %d prompts (%d blocked, %d redacted).
+
+Please analyse this data and provide:
+1. USAGE PATTERNS — what tasks and topics dominate? What languages or frameworks appear most?
+2. DATA HYGIENE — are there recurring patterns of sensitive data being sent (even after redaction)?
+   Which services receive the most sensitive context?
+3. PROMPT QUALITY — are prompts specific and effective, or vague? Any anti-patterns?
+4. SECURITY OBSERVATIONS — anything noteworthy about what context is being shared with AI tools?
+5. RECOMMENDATIONS — concrete actions to improve workflow, reduce sensitive data exposure,
+   or get better results from AI tools.
+
+Keep the analysis practical and specific to what you actually observe in the data below.
+Where useful, quote specific prompt excerpts to support your points.
+
+%s
+EXPORT METADATA
+Generated : %s
+Range     : %s → %s
+Total     : %d prompts (%d blocked, %d redacted)
+%s
+
+`,
+		fromStr, toStr, len(prompts), blocked, redacted,
+		strings.Repeat("=", 72),
+		time.Now().Format("2006-01-02 15:04:05"),
+		fromStr, toStr,
+		len(prompts), blocked, redacted,
+		strings.Repeat("=", 72),
+	)
 
 	for i, p := range prompts {
 		text := p.Prompt
