@@ -34,6 +34,11 @@ func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) 
 	mux.HandleFunc("/api/export", func(w http.ResponseWriter, r *http.Request) {
 		apiExport(w, r, db)
 	})
+	mux.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		fmt.Fprint(w, logoSVG)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, dashboardHTML)
@@ -249,6 +254,7 @@ var dashboardHTML = `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Prompt Guard</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>
@@ -806,3 +812,75 @@ document.addEventListener('click', function(e) {
 `
 
 var _ = time.Now
+
+var logoSVG = `<svg width="680" height="680" viewBox="0 0 680 680" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d0f1a"/>
+      <stop offset="100%" stop-color="#11132a"/>
+    </linearGradient>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e2a5e"/>
+      <stop offset="100%" stop-color="#2a1050"/>
+    </linearGradient>
+    <linearGradient id="edgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4a7fff"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#c084fc"/>
+    </linearGradient>
+    <clipPath id="shieldClip">
+      <path d="M340 160 L500 210 L500 360 Q500 460 340 530 Q180 460 180 360 L180 210 Z"/>
+    </clipPath>
+  </defs>
+  <circle cx="340" cy="340" r="300" fill="url(#bgGrad)"/>
+  <circle cx="340" cy="340" r="295" fill="none" stroke="#4a7fff" stroke-width="0.5" opacity="0.18"/>
+  <circle cx="340" cy="340" r="285" fill="none" stroke="#a855f7" stroke-width="0.5" opacity="0.1"/>
+  <path d="M340 160 L500 210 L500 360 Q500 460 340 530 Q180 460 180 360 L180 210 Z" fill="url(#shieldGrad)"/>
+  <path d="M340 160 L500 210 L500 360 Q500 460 340 530 Q180 460 180 360 L180 210 Z" fill="none" stroke="#4a7fff" stroke-width="1.5" opacity="0.7"/>
+  <path d="M340 160 L500 210 L500 360 Q500 460 340 530 Q180 460 180 360 L180 210 Z" fill="none" stroke="#a855f7" stroke-width="0.5" opacity="0.5"/>
+  <g clip-path="url(#shieldClip)" opacity="0.9">
+    <line x1="267" y1="250" x2="313" y2="300" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="267" y1="250" x2="340" y2="285" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="267" y1="250" x2="367" y2="300" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.25"/>
+    <line x1="340" y1="230" x2="313" y2="300" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="340" y1="230" x2="340" y2="285" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.45"/>
+    <line x1="340" y1="230" x2="367" y2="300" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="413" y1="250" x2="313" y2="300" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.25"/>
+    <line x1="413" y1="250" x2="340" y2="285" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="413" y1="250" x2="367" y2="300" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="313" y1="300" x2="295" y2="370" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="313" y1="300" x2="340" y2="355" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="313" y1="300" x2="385" y2="370" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.25"/>
+    <line x1="340" y1="285" x2="295" y2="370" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="340" y1="285" x2="340" y2="355" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.5"/>
+    <line x1="340" y1="285" x2="385" y2="370" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="367" y1="300" x2="295" y2="370" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.25"/>
+    <line x1="367" y1="300" x2="340" y2="355" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="367" y1="300" x2="385" y2="370" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="295" y1="370" x2="310" y2="435" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.3"/>
+    <line x1="295" y1="370" x2="340" y2="445" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.3"/>
+    <line x1="340" y1="355" x2="310" y2="435" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="340" y1="355" x2="340" y2="445" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.45"/>
+    <line x1="340" y1="355" x2="370" y2="435" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.35"/>
+    <line x1="385" y1="370" x2="340" y2="445" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.3"/>
+    <line x1="385" y1="370" x2="370" y2="435" stroke="url(#edgeGrad)" stroke-width="0.8" opacity="0.3"/>
+    <circle cx="267" cy="250" r="5" fill="url(#nodeGrad)" opacity="0.8"/>
+    <circle cx="340" cy="230" r="6" fill="url(#nodeGrad)" opacity="0.95"/>
+    <circle cx="413" cy="250" r="5" fill="url(#nodeGrad)" opacity="0.8"/>
+    <circle cx="313" cy="300" r="4.5" fill="url(#nodeGrad)" opacity="0.85"/>
+    <circle cx="340" cy="285" r="5.5" fill="url(#nodeGrad)" opacity="0.9"/>
+    <circle cx="367" cy="300" r="4.5" fill="url(#nodeGrad)" opacity="0.85"/>
+    <circle cx="295" cy="370" r="4.5" fill="url(#nodeGrad)" opacity="0.85"/>
+    <circle cx="340" cy="355" r="5.5" fill="url(#nodeGrad)" opacity="0.9"/>
+    <circle cx="385" cy="370" r="4.5" fill="url(#nodeGrad)" opacity="0.85"/>
+    <circle cx="310" cy="435" r="4" fill="url(#nodeGrad)" opacity="0.75"/>
+    <circle cx="340" cy="445" r="5.5" fill="url(#nodeGrad)" opacity="0.95"/>
+    <circle cx="370" cy="435" r="4" fill="url(#nodeGrad)" opacity="0.75"/>
+    <circle cx="340" cy="340" r="55" fill="none" stroke="url(#edgeGrad)" stroke-width="0.6" opacity="0.2"/>
+    <circle cx="340" cy="340" r="80" fill="none" stroke="url(#edgeGrad)" stroke-width="0.5" opacity="0.12"/>
+  </g>
+  <path d="M340 168 L492 215 L492 360 Q492 453 340 521" fill="none" stroke="#ffffff" stroke-width="0.6" opacity="0.08"/>
+</svg>`

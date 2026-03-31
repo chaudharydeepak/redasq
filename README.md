@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.svg" width="120" alt="Prompt Guard">
+</p>
+
 # Prompt Guard
 
 A lightweight HTTPS MITM proxy that intercepts prompts sent to AI coding assistants and APIs — blocking or redacting sensitive data before it leaves your machine.

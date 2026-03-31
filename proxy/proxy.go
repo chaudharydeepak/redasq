@@ -86,8 +86,10 @@ func (p *proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(clientConn, "HTTP/1.1 200 Connection established\r\n\r\n")
 
 	if isTarget(r.Host) {
+		log.Printf("CONNECT %s (intercepting)", r.Host)
 		p.mitm(clientConn, r.Host)
 	} else {
+		log.Printf("CONNECT %s (tunnelling)", r.Host)
 		p.tunnel(clientConn, r.Host)
 	}
 }
