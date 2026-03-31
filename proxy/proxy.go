@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -42,14 +44,16 @@ func isTarget(hostport string) bool {
 }
 
 type proxy struct {
-	ca  *CA
-	db  *store.Store
-	eng *inspector.Engine
+	ca            *CA
+	db            *store.Store
+	eng           *inspector.Engine
+	upstreamProxy string // optional: "http://host:port" or "http://user:pass@host:port"
 }
 
 // Start runs the HTTP proxy on the given port. Blocks until error.
-func Start(port int, ca *CA, db *store.Store, eng *inspector.Engine) error {
-	p := &proxy{ca: ca, db: db, eng: eng}
+// upstreamProxy is optional — set to route outbound traffic through a corporate proxy.
+func Start(port int, ca *CA, db *store.Store, eng *inspector.Engine, upstreamProxy string) error {
+	p := &proxy{ca: ca, db: db, eng: eng, upstreamProxy: upstreamProxy}
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: p,
@@ -84,7 +88,7 @@ func (p *proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	if isTarget(r.Host) {
 		p.mitm(clientConn, r.Host)
 	} else {
-		tunnel(clientConn, r.Host)
+		p.tunnel(clientConn, r.Host)
 	}
 }
 
@@ -172,6 +176,58 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 	}
 }
 
+// dialUpstream opens a TCP connection to hostport, routing through the
+// corporate proxy when configured. For HTTPS targets it sends HTTP CONNECT
+// to the upstream proxy and returns the tunnel connection.
+func (p *proxy) dialUpstream(hostport string) (net.Conn, error) {
+	if p.upstreamProxy == "" {
+		return net.DialTimeout("tcp", hostport, 15*time.Second)
+	}
+
+	u, err := url.Parse(p.upstreamProxy)
+	if err != nil {
+		return nil, fmt.Errorf("upstream proxy URL: %w", err)
+	}
+	proxyAddr := u.Host
+	if u.Port() == "" {
+		proxyAddr = u.Hostname() + ":8080"
+	}
+
+	conn, err := net.DialTimeout("tcp", proxyAddr, 15*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial upstream proxy: %w", err)
+	}
+
+	// Send CONNECT to the upstream proxy to open a tunnel to the real target.
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Host: hostport},
+		Host:   hostport,
+		Header: make(http.Header),
+	}
+	if u.User != nil {
+		user := u.User.Username()
+		pass, _ := u.User.Password()
+		req.Header.Set("Proxy-Authorization",
+			"Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
+	}
+	if err := req.Write(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("proxy CONNECT: %w", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("proxy CONNECT response: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		conn.Close()
+		return nil, fmt.Errorf("proxy CONNECT: %s", resp.Status)
+	}
+	return conn, nil
+}
+
 // forward dials the real upstream, sends the request, and writes the response back to dst.
 func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) error {
 	hostname := hostport
@@ -179,17 +235,23 @@ func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) error 
 		hostname = h
 	}
 
-	up, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: 15 * time.Second},
-		"tcp", hostport,
-		&tls.Config{
-			ServerName: hostname,
-			NextProtos: []string{"http/1.1"},
-		},
-	)
+	tcpConn, err := p.dialUpstream(hostport)
 	if err != nil {
 		return err
 	}
+	up := tls.Client(tcpConn, &tls.Config{
+		ServerName: hostname,
+		NextProtos: []string{"http/1.1"},
+	})
+	if err := up.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		tcpConn.Close()
+		return err
+	}
+	if err := up.Handshake(); err != nil {
+		tcpConn.Close()
+		return err
+	}
+	up.SetDeadline(time.Time{})
 	defer up.Close()
 
 	if err := req.Write(up); err != nil {
@@ -388,9 +450,9 @@ func (p *proxy) handlePlainHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // tunnel blindly copies bytes between client and upstream (non-intercepted CONNECT).
-func tunnel(client net.Conn, hostport string) {
+func (p *proxy) tunnel(client net.Conn, hostport string) {
 	defer client.Close()
-	up, err := net.DialTimeout("tcp", hostport, 15*time.Second)
+	up, err := p.dialUpstream(hostport)
 	if err != nil {
 		return
 	}

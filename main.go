@@ -16,9 +16,10 @@ import (
 )
 
 func main() {
-	port    := flag.Int("port", 8080, "Proxy port")
-	webPort := flag.Int("web-port", 7778, "Web dashboard port")
-	caDir   := flag.String("ca-dir", defaultCADir(), "Directory for CA cert/key and database")
+	port          := flag.Int("port", 8080, "Proxy port")
+	webPort       := flag.Int("web-port", 7778, "Web dashboard port")
+	caDir         := flag.String("ca-dir", defaultCADir(), "Directory for CA cert/key and database")
+	upstreamProxy := flag.String("upstream-proxy", "", "Corporate proxy to route outbound traffic through (e.g. http://proxy.corp.com:8080)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*caDir, 0700); err != nil {
@@ -63,9 +64,9 @@ func main() {
 		})
 	}
 
-	printSetup(ca.CertPath, *port, *webPort)
+	printSetup(ca.CertPath, *port, *webPort, *upstreamProxy)
 	web.Start(*webPort, db, eng, filepath.Join(*caDir, "rules.json"))
-	log.Fatal(proxy.Start(*port, ca, db, eng))
+	log.Fatal(proxy.Start(*port, ca, db, eng, *upstreamProxy))
 }
 
 func defaultCADir() string {
@@ -73,7 +74,7 @@ func defaultCADir() string {
 	return filepath.Join(home, ".prompt-guard")
 }
 
-func printSetup(certPath string, port, webPort int) {
+func printSetup(certPath string, port, webPort int, upstreamProxy string) {
 	fmt.Println("\n┌─────────────────────────────────────────┐")
 	fmt.Println("│           Prompt Guard starting         │")
 	fmt.Println("└─────────────────────────────────────────┘")
@@ -90,5 +91,9 @@ func printSetup(certPath string, port, webPort int) {
 
 	fmt.Printf("Set proxy:\n  export HTTP_PROXY=http://localhost:%d\n  export HTTPS_PROXY=http://localhost:%d\n  export NO_PROXY=localhost,127.0.0.1\n\n", port, port)
 	fmt.Printf("Dashboard:  http://localhost:%d\n", webPort)
-	fmt.Printf("Rules file: %s\n\n", filepath.Join(filepath.Dir(certPath), "rules.json"))
+	fmt.Printf("Rules file: %s\n", filepath.Join(filepath.Dir(certPath), "rules.json"))
+	if upstreamProxy != "" {
+		fmt.Printf("Upstream:   %s\n", upstreamProxy)
+	}
+	fmt.Println()
 }
