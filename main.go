@@ -15,6 +15,9 @@ import (
 	"github.com/chaudharydeepak/prompt-guard/web"
 )
 
+// version is set at build time via -ldflags="-X main.version=v1.2.3"
+var version = "dev"
+
 func main() {
 	port          := flag.Int("port", 8080, "Proxy port")
 	webPort       := flag.Int("web-port", 7778, "Web dashboard port")
@@ -79,7 +82,7 @@ func defaultCADir() string {
 
 func printSetup(certPath string, port, webPort int, upstreamProxy string) {
 	fmt.Println("\n┌─────────────────────────────────────────┐")
-	fmt.Println("│           Prompt Guard starting         │")
+	fmt.Printf( "│        Prompt Guard %-20s│\n", version)
 	fmt.Println("└─────────────────────────────────────────┘")
 	fmt.Printf("\nCA cert:   %s\n\n", certPath)
 
