@@ -382,7 +382,18 @@ func writeBlockedResponse(conn net.Conn, assistantMsg string, streaming bool, pa
 		if streaming {
 			msgStart := `{"type":"message_start","message":{"id":"msg_blocked","type":"message","role":"assistant","content":[],"model":"claude-haiku-4.5","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}`
 			cbStart := `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
-			cbDelta := fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":%s}}`, jsonString(assistantMsg))
+			cbDeltaB, _ := json.Marshal(struct {
+				Type  string `json:"type"`
+				Index int    `json:"index"`
+				Delta struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"delta"`
+			}{Type: "content_block_delta", Delta: struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}{Type: "text_delta", Text: assistantMsg}})
+			cbDelta := string(cbDeltaB)
 			cbStop := `{"type":"content_block_stop","index":0}`
 			msgDelta := `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`
 			msgStop := `{"type":"message_stop"}`
@@ -397,13 +408,36 @@ func writeBlockedResponse(conn net.Conn, assistantMsg string, streaming bool, pa
 				body,
 			)
 		} else {
-			body := fmt.Sprintf(
-				`{"id":"msg_blocked","type":"message","role":"assistant","content":[{"type":"text","text":%s}],"model":"claude-haiku-4.5","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":1}}`,
-				jsonString(assistantMsg),
-			)
+			b, _ := json.Marshal(struct {
+				ID           string `json:"id"`
+				Type         string `json:"type"`
+				Role         string `json:"role"`
+				Content      []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+				Model        string      `json:"model"`
+				StopReason   string      `json:"stop_reason"`
+				StopSequence interface{} `json:"stop_sequence"`
+				Usage        struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}{
+				ID: "msg_blocked", Type: "message", Role: "assistant",
+				Content:    []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}{{Type: "text", Text: assistantMsg}},
+				Model: "claude-haiku-4.5", StopReason: "end_turn", StopSequence: nil,
+				Usage: struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				}{OutputTokens: 1},
+			})
 			fmt.Fprintf(conn,
 				"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-				len(body), body,
+				len(b), b,
 			)
 		}
 		return
@@ -411,36 +445,80 @@ func writeBlockedResponse(conn net.Conn, assistantMsg string, streaming bool, pa
 
 	// OpenAI format (chat/completions and everything else).
 	if streaming {
-		chunk := fmt.Sprintf(
-			`{"id":"chatcmpl-blocked","object":"chat.completion.chunk","created":0,"model":"prompt-guard",`+
-				`"choices":[{"index":0,"delta":{"role":"assistant","content":%s},"finish_reason":null}]}`,
-			jsonString(assistantMsg),
-		)
+		chunkB, _ := json.Marshal(struct {
+			ID      string `json:"id"`
+			Object  string `json:"object"`
+			Created int    `json:"created"`
+			Model   string `json:"model"`
+			Choices []struct {
+				Index        int    `json:"index"`
+				Delta        struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"delta"`
+				FinishReason interface{} `json:"finish_reason"`
+			} `json:"choices"`
+		}{
+			ID: "chatcmpl-blocked", Object: "chat.completion.chunk", Model: "prompt-guard",
+			Choices: []struct {
+				Index        int    `json:"index"`
+				Delta        struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"delta"`
+				FinishReason interface{} `json:"finish_reason"`
+			}{{Delta: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Role: "assistant", Content: assistantMsg}}},
+		})
 		done := `{"id":"chatcmpl-blocked","object":"chat.completion.chunk","created":0,"model":"prompt-guard",` +
 			`"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
-		body := "data: " + chunk + "\n\ndata: " + done + "\n\ndata: [DONE]\n\n"
+		body := "data: " + string(chunkB) + "\n\ndata: " + done + "\n\ndata: [DONE]\n\n"
 		fmt.Fprintf(conn,
 			"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n%s",
 			body,
 		)
 	} else {
-		body := fmt.Sprintf(
-			`{"id":"chatcmpl-blocked","object":"chat.completion","created":0,"model":"prompt-guard",`+
-				`"choices":[{"index":0,"message":{"role":"assistant","content":%s},"finish_reason":"stop"}],`+
-				`"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`,
-			jsonString(assistantMsg),
-		)
+		b, _ := json.Marshal(struct {
+			ID      string `json:"id"`
+			Object  string `json:"object"`
+			Created int    `json:"created"`
+			Model   string `json:"model"`
+			Choices []struct {
+				Index        int    `json:"index"`
+				Message      struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			} `json:"usage"`
+		}{
+			ID: "chatcmpl-blocked", Object: "chat.completion", Model: "prompt-guard",
+			Choices: []struct {
+				Index        int    `json:"index"`
+				Message      struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			}{{Message: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Role: "assistant", Content: assistantMsg}, FinishReason: "stop"}},
+		})
 		fmt.Fprintf(conn,
 			"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-			len(body), body,
+			len(b), b,
 		)
 	}
 }
 
-func jsonString(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}
 
 // handlePlainHTTP proxies plain HTTP requests (non-CONNECT).
 func (p *proxy) handlePlainHTTP(w http.ResponseWriter, r *http.Request) {
