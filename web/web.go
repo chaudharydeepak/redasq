@@ -373,29 +373,42 @@ var dashboardHTML = `<!DOCTYPE html>
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg-base); color: var(--text-1); font-size: 13px; min-height: 100vh; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg-base); color: var(--text-1); font-size: 14px; min-height: 100vh; }
 
   /* ── Header ────────────────────────────────────── */
-  .hd { display: flex; align-items: center; gap: 12px; padding: 0 20px; height: 50px;
+  .hd { display: flex; align-items: center; gap: 10px; padding: 0 24px; height: 54px;
         background: var(--bg-surface); border-bottom: 1px solid var(--border);
-        position: sticky; top: 0; z-index: 100; }
-  .hd-logo { display: flex; align-items: center; gap: 8px; }
-  .hd-shield { width: 28px; height: 28px; flex-shrink: 0; }
-  .hd-name { font-weight: 700; font-size: 14px; letter-spacing: -.3px; }
+        position: sticky; top: 0; z-index: 100;
+        /* Subtle backdrop blur adds depth without full opacity */
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .hd-logo { display: flex; align-items: center; gap: 9px; }
+  .hd-shield { width: 26px; height: 26px; flex-shrink: 0; }
+  /* Product name: "Prompt" in default text, "Guard" in accent — reversed from original
+     so the differentiating word is accented, matching Linear/Vercel conventions */
+  .hd-name { font-weight: 700; font-size: 15px; letter-spacing: -.4px; }
   .hd-name em { color: var(--accent); font-style: normal; }
-  .hd-sep { width: 1px; height: 18px; background: var(--border); }
-  .hd-badge { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(59,130,246,.2);
-              border-radius: 4px; padding: 1px 7px; font-size: 10.5px; font-weight: 600; letter-spacing: .2px; }
-  .hd-meta { color: var(--text-3); font-size: 11px; }
-  .hd-live { display: flex; align-items: center; gap: 5px; color: var(--success); font-size: 11px; font-weight: 600; }
-  .hd-live::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--success);
-                     box-shadow:0 0 0 0 var(--success); animation:pulse 2s infinite; }
-  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(16,185,129,.5)} 70%{box-shadow:0 0 0 6px rgba(16,185,129,0)} 100%{box-shadow:0 0 0 0 rgba(16,185,129,0)} }
+  .hd-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
+  /* PROXY badge: pill shape, slightly more padding, matches Datadog env badges */
+  .hd-badge { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(59,130,246,.25);
+              border-radius: 20px; padding: 2px 9px; font-size: 10px; font-weight: 700; letter-spacing: .6px;
+              text-transform: uppercase; }
+  /* Clock: subtler, right-aligned after spacer */
+  .hd-meta { color: var(--text-3); font-size: 11.5px; font-variant-numeric: tabular-nums; letter-spacing: .2px; }
+  /* Live indicator: add "LIVE" text for clarity, pulse stays */
+  .hd-live { display: flex; align-items: center; gap: 6px; color: var(--success); font-size: 11px; font-weight: 700;
+             letter-spacing: .4px; text-transform: uppercase; }
+  .hd-live::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--success);
+                     box-shadow:0 0 0 0 var(--success); animation:pulse 2s infinite; flex-shrink:0; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(16,185,129,.6)} 70%{box-shadow:0 0 0 8px rgba(16,185,129,0)} 100%{box-shadow:0 0 0 0 rgba(16,185,129,0)} }
   .hd-spacer { flex: 1; }
-  .icon-btn { border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-2);
-              border-radius: 6px; padding: 5px 9px; font-size: 13px; cursor: pointer; font-family: inherit;
-              line-height: 1; display: flex; align-items: center; }
-  .icon-btn:hover { background: var(--border); color: var(--text-1); }
+  /* Icon buttons: proper SVG icons instead of emoji, square with defined size */
+  .icon-btn { border: 1px solid var(--border); background: transparent; color: var(--text-2);
+              border-radius: 7px; width: 32px; height: 32px; cursor: pointer; font-family: inherit;
+              display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+              transition: background .15s, border-color .15s, color .15s; }
+  .icon-btn:hover { background: var(--bg-raised); border-color: var(--text-3); color: var(--text-1); }
+  .icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75;
+                  stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 
   /* ── Layout ────────────────────────────────────── */
   .pg-main { padding: 18px 20px; max-width: 1280px; margin: 0 auto; }
@@ -403,42 +416,70 @@ var dashboardHTML = `<!DOCTYPE html>
   @media(max-width:880px) { .pg-cols { grid-template-columns: 1fr; } }
 
   /* ── Metric tiles ──────────────────────────────── */
-  .tiles { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-bottom: 16px; }
-  @media(max-width:900px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
-  .tile { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px;
-          position: relative; overflow: hidden; }
-  .tile::before { content:''; position:absolute; top:0;left:0;right:0; height:2px; }
-  .tile-total::before  { background: linear-gradient(90deg,var(--accent),transparent); }
-  .tile-clean::before  { background: linear-gradient(90deg,var(--success),transparent); }
-  .tile-flagged::before{ background: linear-gradient(90deg,var(--warning),transparent); }
-  .tile-redacted::before{background: linear-gradient(90deg,var(--purple),transparent); }
-  .tile-blocked::before{ background: linear-gradient(90deg,var(--danger),transparent); }
-  .tile-host::before   { background: linear-gradient(90deg,var(--text-3),transparent); }
-  .tile-lbl { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); margin-bottom: 7px; }
-  .tile-val { font-size: 24px; font-weight: 700; line-height: 1; color: var(--text-1); }
+  /* 7-column grid; last 2 (telemetry, top-host) are utility/metadata and narrower visually */
+  .tiles { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-bottom: 18px; }
+  @media(max-width:1000px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
+  @media(max-width:640px)  { .tiles { grid-template-columns: repeat(2, 1fr); } }
+
+  .tile { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px;
+          padding: 14px 16px 13px; position: relative; overflow: hidden;
+          transition: border-color .2s; }
+  /* Top accent bar — 3px for the five primary metrics */
+  .tile::before { content:''; position:absolute; top:0;left:0;right:0; height:3px; border-radius:10px 10px 0 0; }
+  .tile-total::before   { background: linear-gradient(90deg,var(--accent) 0%,transparent 85%); }
+  .tile-clean::before   { background: linear-gradient(90deg,var(--success) 0%,transparent 85%); }
+  .tile-flagged::before { background: linear-gradient(90deg,var(--warning) 0%,transparent 85%); }
+  .tile-redacted::before{ background: linear-gradient(90deg,var(--purple) 0%,transparent 85%); }
+  .tile-blocked::before { background: linear-gradient(90deg,var(--danger) 0%,transparent 85%); }
+  /* Telemetry gets a distinct teal accent — it is security-relevant, not neutral */
+  .tile-telemetry::before { background: linear-gradient(90deg,#06b6d4 0%,transparent 85%); }
+  /* Top host — grey, it is metadata not a metric */
+  .tile-tophost::before { background: linear-gradient(90deg,var(--border) 0%,transparent 60%); }
+
+  /* CRITICAL STATE: when blocked/flagged tile has a non-zero value, glow the border.
+     Applied by JS via .tile--alert class. */
+  .tile--alert { border-color: rgba(239,68,68,.35); box-shadow: 0 0 0 1px rgba(239,68,68,.12), inset 0 0 20px rgba(239,68,68,.04); }
+  .tile--alert .tile-lbl { color: rgba(239,68,68,.7); }
+
+  .tile-lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px;
+              color: var(--text-3); margin-bottom: 8px; }
+  /* Primary metrics get a larger, bolder number — these drive decisions */
+  .tile-val { font-size: 26px; font-weight: 700; line-height: 1; letter-spacing: -.5px;
+              font-variant-numeric: tabular-nums; }
   .tile-val.c-total   { color: var(--text-1); }
   .tile-val.c-clean   { color: var(--success); }
   .tile-val.c-flagged { color: var(--warning); }
   .tile-val.c-redacted{ color: var(--purple); }
   .tile-val.c-blocked { color: var(--danger); }
-  .tile-sub { font-size: 11px; color: var(--text-3); margin-top: 4px; }
-  .tile-host-val { font-size: 12px; font-weight: 600; padding-top: 5px; word-break: break-all; }
+  /* Telemetry value: smaller weight — it is a secondary signal */
+  .tile-val.c-telemetry { color: #06b6d4; font-size: 22px; }
+  .tile-sub { font-size: 11px; color: var(--text-3); margin-top: 5px; letter-spacing: .1px; }
+  /* Top host tile: compact hostname display */
+  .tile-host-val { font-size: 11.5px; font-weight: 600; margin-top: 4px;
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
 
   /* ── Panel ─────────────────────────────────────── */
-  .panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 14px; }
-  .panel-hd { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  .panel-title { font-weight: 600; font-size: 12.5px; }
+  .panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px;
+           overflow: hidden; margin-bottom: 14px; }
+  .panel-hd { display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+              border-bottom: 1px solid var(--border); }
+  /* Panel title: slightly larger than before, matches Grafana panel headers */
+  .panel-title { font-weight: 600; font-size: 13px; letter-spacing: -.1px; }
+  /* Count badge: pill, matches Linear's issue count chips */
   .panel-count { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 20px;
-                 padding: 1px 8px; font-size: 11px; color: var(--text-2); font-weight: 600; }
+                 padding: 1px 9px; font-size: 11px; color: var(--text-2); font-weight: 600;
+                 font-variant-numeric: tabular-nums; }
 
   /* ── Filter tabs ───────────────────────────────── */
-  .ftabs { display: flex; gap: 3px; margin-left: auto; background: var(--bg-raised); border: 1px solid var(--border);
-           border-radius: 6px; padding: 2px; }
-  .ftab { border: none; background: transparent; color: var(--text-3); border-radius: 4px; padding: 3px 10px;
-          font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; letter-spacing: .1px; }
-  .ftab:hover { color: var(--text-1); }
+  /* Segmented control pattern used by Linear and Vercel — sits on bg-raised, active is surface+shadow */
+  .ftabs { display: flex; gap: 2px; margin-left: auto; background: var(--bg-raised); border: 1px solid var(--border);
+           border-radius: 7px; padding: 3px; flex-shrink: 0; }
+  .ftab { border: none; background: transparent; color: var(--text-3); border-radius: 5px;
+          padding: 4px 11px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+          letter-spacing: .15px; transition: color .12s, background .12s; white-space: nowrap; }
+  .ftab:hover { color: var(--text-1); background: rgba(255,255,255,.04); }
   .ftab.active { background: var(--bg-surface); color: var(--text-1);
-                 box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+                 box-shadow: 0 1px 2px rgba(0,0,0,.18), 0 0 0 0.5px rgba(0,0,0,.08); }
 
   /* ── Scrollbars ─────────────────────────────────── */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -449,91 +490,127 @@ var dashboardHTML = `<!DOCTYPE html>
   /* ── Table ─────────────────────────────────────── */
   .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .pg-tbl { width: 100%; border-collapse: collapse; }
-  .pg-tbl th { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
-               color: var(--text-3); padding: 7px 14px; border-bottom: 1px solid var(--border);
+  /* Column headers: tighter letter-spacing, standard Datadog table header style */
+  .pg-tbl th { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
+               color: var(--text-3); padding: 8px 16px; border-bottom: 1px solid var(--border);
                background: var(--bg-raised); white-space: nowrap; text-align: left; }
-  .pg-tbl td { padding: 9px 14px; border-bottom: 1px solid var(--border-sub); color: var(--text-1);
-               vertical-align: middle; white-space: nowrap; }
+  /* Data rows: taller for breathing room — 11px vertical padding is industry standard for dense tables */
+  .pg-tbl td { padding: 11px 16px; border-bottom: 1px solid var(--border-sub); color: var(--text-1);
+               vertical-align: middle; white-space: nowrap; font-size: 13px; }
   .pg-tbl tr:last-child td { border-bottom: none; }
   .pg-tbl tbody tr { cursor: pointer; transition: background .1s; }
+  /* Hover: slightly brighter bg + left accent line for clear row selection affordance */
   .pg-tbl tbody tr:hover td { background: var(--bg-raised); }
+  .pg-tbl tbody tr:hover td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
   .pg-tbl .muted { color: var(--text-3); }
-  .pg-tbl .mono  { font-family: 'SF Mono','Fira Code',Menlo,monospace; font-size: 11px; }
-  .pg-tbl .empty td { color: var(--text-3); text-align: center; padding: 36px; cursor: default; }
+  /* Monospace: slightly larger than before, legible at 14px base */
+  .pg-tbl .mono  { font-family: 'SF Mono','Fira Code',ui-monospace,Menlo,monospace; font-size: 12px; }
+  /* Empty state: more breathing room, actionable message */
+  .pg-tbl .empty td { color: var(--text-3); text-align: center; padding: 56px 36px; cursor: default;
+                       font-size: 13px; line-height: 1.6; }
+  /* Pagination bar */
   .pagination { display:flex; align-items:center; gap:6px; padding:10px 16px;
                 border-top:1px solid var(--border); font-size:12px; color:var(--text-2); }
-  .pagination .pg-info { flex:1; }
-  .pg-btn { background:var(--bg-raised); border:1px solid var(--border); color:var(--text-1);
-            padding:3px 10px; border-radius:5px; cursor:pointer; font-size:12px; }
-  .pg-btn:disabled { opacity:.35; cursor:default; }
-  .pg-btn:not(:disabled):hover { border-color:var(--accent); }
-  .pg-select { background:var(--bg-raised); border:1px solid var(--border); color:var(--text-1);
-               padding:3px 6px; border-radius:5px; font-size:12px; cursor:pointer; }
+  .pagination .pg-info { flex:1; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .pg-btn { background:var(--bg-raised); border:1px solid var(--border); color:var(--text-2);
+            padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px; font-family:inherit;
+            transition: border-color .15s, color .15s; }
+  .pg-btn:disabled { opacity:.3; cursor:default; }
+  .pg-btn:not(:disabled):hover { border-color:var(--accent); color:var(--text-1); }
+  .pg-select { background:var(--bg-raised); border:1px solid var(--border); color:var(--text-2);
+               padding:4px 7px; border-radius:6px; font-size:12px; cursor:pointer; font-family:inherit; }
+  /* Row tinting: slightly more opaque than before for better legibility on light theme */
   .pg-tbl tr.row-blocked  td { background: var(--blocked-bg); }
   .pg-tbl tr.row-flagged  td { background: var(--flagged-bg); }
   .pg-tbl tr.row-redacted td { background: var(--redacted-bg); }
 
   /* ── Detail row ────────────────────────────────── */
+  /* Left-inset border connects visually to the expanded row above */
   .detail-row td { background: var(--bg-input) !important; padding: 0 !important;
-                   white-space: normal !important; cursor: default !important; }
-  .detail-inner { padding: 14px 16px; }
-  .detail-section-lbl { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px;
-                        color: var(--text-3); margin-bottom: 5px; }
+                   white-space: normal !important; cursor: default !important;
+                   border-left: 3px solid var(--accent) !important; }
+  .detail-inner { padding: 16px 20px; display: grid; gap: 14px; }
+  .detail-section-lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px;
+                        color: var(--text-3); margin-bottom: 6px; }
   .detail-section-lbl.lbl-purple { color: var(--purple); }
-  .detail-pre { font-family: 'SF Mono','Fira Code',Menlo,monospace; font-size: 11px; color: var(--text-2);
-                background: var(--bg-base); border: 1px solid var(--border); border-radius: 6px;
-                padding: 10px 12px; margin-bottom: 10px; white-space: pre-wrap; word-break: break-word;
-                max-height: 200px; overflow-y: auto; line-height: 1.6; }
-  .banner { border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-  .banner-blocked  { background: var(--danger-dim);  border: 1px solid rgba(239,68,68,.25);  color: var(--danger);  }
-  .banner-redacted { background: var(--purple-dim);  border: 1px solid rgba(167,139,250,.25); color: var(--purple); }
-  .match-list { display: flex; flex-direction: column; gap: 5px; }
-  .match-item { display: flex; align-items: flex-start; gap: 10px; background: var(--bg-surface);
-                border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
-  .match-meta { display: flex; flex-direction: column; gap: 4px; min-width: 70px; }
-  .match-snippet { font-family: 'SF Mono','Fira Code',Menlo,monospace; font-size: 10.5px; color: var(--text-2);
-                   flex: 1; word-break: break-all; line-height: 1.5; }
+  /* Prompt text: proportional font (Inter) for readable prose, not monospace.
+     Monospace is reserved for the matched snippet (the actual sensitive fragment). */
+  .detail-pre { font-family: 'Inter', system-ui, sans-serif; font-size: 13px; color: var(--text-2);
+                background: var(--bg-base); border: 1px solid var(--border); border-radius: 7px;
+                padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
+                max-height: 180px; overflow-y: auto; line-height: 1.7; }
+  /* Banner: icon-forward layout, slightly more padding */
+  .banner { border-radius: 7px; padding: 9px 14px; font-size: 12.5px; font-weight: 600;
+            display: flex; align-items: center; gap: 9px; }
+  .banner-blocked  { background: var(--danger-dim);  border: 1px solid rgba(239,68,68,.3);   color: var(--danger);  }
+  .banner-redacted { background: var(--purple-dim);  border: 1px solid rgba(167,139,250,.3); color: var(--purple); }
+  /* Match list */
+  .match-list { display: flex; flex-direction: column; gap: 6px; }
+  .match-item { display: flex; align-items: flex-start; gap: 12px; background: var(--bg-surface);
+                border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; }
+  .match-meta { display: flex; flex-direction: column; gap: 5px; min-width: 80px; flex-shrink: 0; }
+  /* Snippets stay monospace — these are the actual matched credential fragments */
+  .match-snippet { font-family: 'SF Mono','Fira Code',ui-monospace,Menlo,monospace; font-size: 11px;
+                   color: var(--text-2); flex: 1; word-break: break-all; line-height: 1.55; }
 
   /* ── Tags ──────────────────────────────────────── */
-  .tag { display: inline-flex; align-items: center; border-radius: 4px; padding: 2px 6px; font-size: 10px;
-         font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
-  .tag-high    { background: var(--danger-dim);  color: var(--danger);  border: 1px solid rgba(239,68,68,.25); }
-  .tag-medium  { background: var(--warning-dim); color: var(--warning); border: 1px solid rgba(245,158,11,.25); }
-  .tag-low     { background: var(--accent-dim);  color: var(--accent);  border: 1px solid rgba(59,130,246,.2); }
-  .tag-blocked  { background: var(--danger-dim);  color: var(--danger);  border: 1px solid rgba(239,68,68,.3); }
-  .tag-flagged  { background: var(--warning-dim); color: var(--warning); border: 1px solid rgba(245,158,11,.3); }
-  .tag-redacted { background: var(--purple-dim);  color: var(--purple);  border: 1px solid rgba(167,139,250,.3); }
-  .tag-clean      { background: var(--success-dim); color: var(--success); border: 1px solid rgba(16,185,129,.25); }
-  .tag-telemetry  { background: rgba(100,116,139,.15); color: #94a3b8; border: 1px solid rgba(100,116,139,.25); }
-  .mm { font-size: 9.5px; font-weight: 700; text-transform: uppercase; padding: 1px 5px; border-radius: 3px; }
-  .mm-block { background: var(--danger-dim);  color: var(--danger); }
-  .mm-track { background: var(--accent-dim);  color: var(--accent); }
+  /* Base tag: increased padding and font-size — status tags are primary data, not footnotes */
+  .tag { display: inline-flex; align-items: center; border-radius: 5px; padding: 3px 8px; font-size: 10.5px;
+         font-weight: 700; letter-spacing: .4px; text-transform: uppercase; white-space: nowrap; }
+  /* Severity tags (used in match details) */
+  .tag-high    { background: var(--danger-dim);  color: var(--danger);  border: 1px solid rgba(239,68,68,.3); }
+  .tag-medium  { background: var(--warning-dim); color: var(--warning); border: 1px solid rgba(245,158,11,.3); }
+  .tag-low     { background: var(--accent-dim);  color: var(--accent);  border: 1px solid rgba(59,130,246,.25); }
+  /* Status tags — blocked is the most critical: slightly wider padding, stronger border */
+  .tag-blocked  { background: var(--danger-dim);  color: var(--danger);  border: 1px solid rgba(239,68,68,.4);
+                  padding: 3px 9px; }
+  .tag-flagged  { background: var(--warning-dim); color: var(--warning); border: 1px solid rgba(245,158,11,.35); }
+  .tag-redacted { background: var(--purple-dim);  color: var(--purple);  border: 1px solid rgba(167,139,250,.35); }
+  .tag-clean    { background: var(--success-dim); color: var(--success); border: 1px solid rgba(16,185,129,.3); }
+  /* Telemetry: distinct teal to match its tile accent */
+  .tag-telemetry { background: rgba(6,182,212,.1); color: #06b6d4; border: 1px solid rgba(6,182,212,.25); }
+  /* Mode mini-tags used in rule match details */
+  .mm { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 4px;
+        letter-spacing: .3px; }
+  .mm-block { background: var(--danger-dim);  color: var(--danger);  border: 1px solid rgba(239,68,68,.2); }
+  .mm-track { background: var(--accent-dim);  color: var(--accent);  border: 1px solid rgba(59,130,246,.2); }
+  .mm-redact { background: var(--purple-dim); color: var(--purple);  border: 1px solid rgba(167,139,250,.2); }
 
   /* ── Rule cards ────────────────────────────────── */
-  .rule-card { padding: 10px 12px 10px 14px; border-bottom: 1px solid var(--border-sub);
-               display: flex; flex-direction: column; gap: 7px;
-               border-left: 3px solid transparent; transition: background .1s; }
+  /* Card layout reworked: severity+control on one row, name+desc below.
+     This puts the actionable control (Track/Block) beside the severity signal,
+     so operator can scan severity → decide mode without vertical jumping. */
+  .rule-card { padding: 11px 14px 11px 15px; border-bottom: 1px solid var(--border-sub);
+               display: flex; flex-direction: column; gap: 6px;
+               border-left: 3px solid transparent; transition: background .15s; }
   .rule-card:last-child { border-bottom: none; }
   .rule-card.sev-high   { border-left-color: var(--danger); }
   .rule-card.sev-medium { border-left-color: var(--warning); }
   .rule-card.sev-low    { border-left-color: var(--accent); }
   .rule-card:hover { background: var(--bg-raised); }
-  .rule-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-  .rule-info { min-width: 0; }
-  .rule-name { font-weight: 600; font-size: 12px; line-height: 1.3; }
-  .rule-desc { color: var(--text-3); font-size: 10.5px; line-height: 1.4; margin-top: 2px; }
-  .rule-foot { display: flex; align-items: center; justify-content: space-between; }
+  /* Row 1: rule name (left) + segmented control (right) — primary action always visible */
+  .rule-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .rule-info { min-width: 0; flex: 1; }
+  .rule-name { font-weight: 600; font-size: 12.5px; line-height: 1.3;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Row 2: description — subordinate, no need to visually compete */
+  .rule-desc { color: var(--text-3); font-size: 11px; line-height: 1.45; }
+  /* Row 3: severity tag — bottom, provides context after you have read name+desc */
+  .rule-foot { display: flex; align-items: center; gap: 6px; }
 
-  /* Segmented control */
-  .seg { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; flex-shrink: 0; }
-  .seg-btn { border: none; background: transparent; color: var(--text-3); padding: 4px 11px;
-             font-size: 10.5px; font-weight: 600; cursor: pointer; font-family: inherit;
-             letter-spacing: .2px; transition: all .15s; }
+  /* Segmented control — Track / Block
+     Increased padding for easier tap/click targets, rounded outer corners */
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+         flex-shrink: 0; background: var(--bg-raised); }
+  .seg-btn { border: none; background: transparent; color: var(--text-3); padding: 4px 12px;
+             font-size: 10.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+             letter-spacing: .3px; transition: background .15s, color .15s; text-transform: uppercase; }
   .seg-btn + .seg-btn { border-left: 1px solid var(--border); }
-  .seg-btn:hover:not(.seg-active-track):not(.seg-active-block) { color: var(--text-1); background: var(--bg-raised); }
-  .seg-btn.seg-active-track { background: var(--accent-dim);  color: var(--accent);  font-weight: 700; }
-  .seg-btn.seg-active-block { background: var(--danger-dim);  color: var(--danger);  font-weight: 700; }
-  .seg-btn:disabled { opacity: .5; cursor: wait; }
+  .seg-btn:hover:not(.seg-active-track):not(.seg-active-block) {
+    color: var(--text-1); background: rgba(255,255,255,.04); }
+  .seg-btn.seg-active-track  { background: var(--accent-dim);  color: var(--accent);  }
+  .seg-btn.seg-active-block  { background: var(--danger-dim);  color: var(--danger);  }
+  .seg-btn:disabled { opacity: .45; cursor: wait; }
 </style>
 </head>
 <body>
@@ -550,8 +627,15 @@ var dashboardHTML = `<!DOCTYPE html>
   <div class="hd-sep"></div>
   <div class="hd-meta" id="meta">connecting…</div>
   <div class="hd-spacer"></div>
-  <button class="icon-btn" onclick="toggleExport()" title="Export prompts" id="export-btn">⬇</button>
-  <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme" id="theme-btn">☀</button>
+  <!-- Download icon (Heroicons outline) -->
+  <button class="icon-btn" onclick="toggleExport()" title="Export prompts" id="export-btn">
+    <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0-4-4m4 4 4-4M4 20h16"/></svg>
+  </button>
+  <!-- Sun/moon icon swapped by JS -->
+  <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme" id="theme-btn">
+    <svg viewBox="0 0 24 24" id="theme-icon-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+    <svg viewBox="0 0 24 24" id="theme-icon-moon" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/></svg>
+  </button>
 </header>
 
 <div id="export-panel" style="display:none;position:fixed;top:52px;right:12px;z-index:100;
@@ -606,14 +690,14 @@ var dashboardHTML = `<!DOCTYPE html>
       <div class="tile-val c-blocked" id="tile-blocked">—</div>
       <div class="tile-sub">stopped at proxy</div>
     </div>
-    <div class="tile tile-host">
+    <div class="tile tile-telemetry">
       <div class="tile-lbl">Telemetry</div>
-      <div class="tile-val" id="tile-telemetry" style="color:var(--text-2);font-size:22px">—</div>
+      <div class="tile-val c-telemetry" id="tile-telemetry">—</div>
       <div class="tile-sub">analytics calls</div>
     </div>
-    <div class="tile tile-host">
+    <div class="tile tile-tophost">
       <div class="tile-lbl">Top Host</div>
-      <div class="tile-host-val" id="tile-host" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</div>
+      <div class="tile-host-val" id="tile-host">—</div>
       <div class="tile-sub">most flagged</div>
     </div>
   </div>
@@ -630,6 +714,7 @@ var dashboardHTML = `<!DOCTYPE html>
             <button class="ftab" onclick="setFilter('blocked',this)">Blocked</button>
             <button class="ftab" onclick="setFilter('redacted',this)">Redacted</button>
             <button class="ftab" onclick="setFilter('flagged',this)">Flagged</button>
+            <button class="ftab" onclick="setFilter('telemetry',this)">Telemetry</button>
             <button class="ftab" onclick="setFilter('clean',this)">Clean</button>
           </div>
         </div>
@@ -687,12 +772,17 @@ function toggleTheme() {
   var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
   html.setAttribute('data-theme', next);
   localStorage.setItem('pg-theme', next);
-  document.getElementById('theme-btn').textContent = next === 'dark' ? '☀' : '☾';
+  updateThemeIcon(next);
 }
-(function(){
-  var t = document.documentElement.getAttribute('data-theme');
-  document.getElementById('theme-btn').textContent = t === 'dark' ? '☀' : '☾';
-})();
+function updateThemeIcon(t) {
+  var sun  = document.getElementById('theme-icon-sun');
+  var moon = document.getElementById('theme-icon-moon');
+  if (!sun || !moon) return;
+  // In dark mode show sun (click → go light). In light mode show moon (click → go dark).
+  sun.style.display  = t === 'dark'  ? '' : 'none';
+  moon.style.display = t === 'light' ? '' : 'none';
+}
+(function(){ updateThemeIcon(document.documentElement.getAttribute('data-theme')); })();
 
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -803,6 +893,12 @@ async function refresh() {
     document.getElementById('tile-host').textContent      = stats.most_flagged_host || '—';
     document.getElementById('prompt-count').textContent  = total;
 
+    // Alert state: glow the blocked tile when there are active blocks; same for flagged
+    var blockedTile = document.querySelector('.tile-blocked');
+    var flaggedTile = document.querySelector('.tile-flagged');
+    if (blockedTile) blockedTile.classList.toggle('tile--alert', (stats.blocked || 0) > 0);
+    if (flaggedTile) flaggedTile.classList.toggle('tile--alert', (stats.flagged || 0) > 0);
+
     // Pagination controls
     var start = (currentPage-1)*pageSize+1;
     var end   = Math.min(currentPage*pageSize, total);
@@ -819,16 +915,36 @@ async function refresh() {
     var wasOpen = openRow;
 
     document.getElementById('prompts-body').innerHTML = prompts.length === 0
-      ? '<tr class="empty"><td colspan="5">No prompts'+(currentFilter !== 'all' ? ' matching "'+currentFilter+'"' : '')+'</td></tr>'
+      ? '<tr class="empty"><td colspan="5">' +
+          (currentFilter !== 'all'
+            ? 'No ' + esc(currentFilter) + ' prompts in this time window.'
+            : 'No prompts intercepted yet.<br><span style="font-size:12px;font-weight:400">Route your AI traffic through the proxy to start seeing requests here.</span>'
+          ) + '</td></tr>'
       : prompts.map(function(p) {
-          var rulesStr = (p.rules||[]).join(', ') || '—';
           var shortPath = p.path.replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '/…');
+          // Rules Hit: render each matched rule as a small chip instead of comma-joined string.
+          // Max 3 chips shown; overflow shown as "+N more" to keep the column scannable.
+          var rules = p.rules || [];
+          var rulesHTML;
+          if (rules.length === 0) {
+            rulesHTML = '<span style="color:var(--text-3)">—</span>';
+          } else {
+            var chips = rules.slice(0, 3).map(function(r) {
+              return '<span style="display:inline-flex;align-items:center;background:var(--bg-raised);' +
+                     'border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:11px;' +
+                     'color:var(--text-2);white-space:nowrap;margin-right:3px">' + esc(r) + '</span>';
+            });
+            if (rules.length > 3) {
+              chips.push('<span style="font-size:11px;color:var(--text-3)">+' + (rules.length - 3) + ' more</span>');
+            }
+            rulesHTML = '<div style="display:flex;flex-wrap:wrap;gap:2px;align-items:center">' + chips.join('') + '</div>';
+          }
           return '<tr id="row-'+p.id+'" class="row-'+p.status+'" onclick="toggleDetail('+p.id+')">' +
             '<td class="mono muted">'+esc(p.time)+'</td>' +
             '<td>'+statusTag(p.status)+'</td>' +
             '<td style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.host)+'">'+esc(p.host)+'</td>' +
             '<td class="mono muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.path)+'">'+esc(shortPath)+'</td>' +
-            '<td style="color:var(--text-2)">'+esc(rulesStr)+'</td>' +
+            '<td>'+rulesHTML+'</td>' +
             '</tr>';
         }).join('');
 
@@ -848,17 +964,18 @@ async function loadRules() {
     document.getElementById('rules-list').innerHTML = rules.map(function(r) {
       var isBlock = r.mode === 'block';
       var sevClass = 'sev-'+(r.severity||'low');
+      var isTrack  = r.mode === 'track';
       return '<div class="rule-card '+sevClass+'">' +
         '<div class="rule-top">' +
           '<div class="rule-info">' +
-            '<div class="rule-name">'+esc(r.name)+'</div>' +
-            '<div class="rule-desc">'+esc(r.description)+'</div>' +
+            '<div class="rule-name" title="'+esc(r.name)+'">'+esc(r.name)+'</div>' +
           '</div>' +
           '<div class="seg" id="seg-'+esc(r.id)+'">' +
-            '<button class="seg-btn '+(isBlock?'':'seg-active-track')+'" onclick="setMode(\''+esc(r.id)+'\',\'track\',this)">Track</button>' +
+            '<button class="seg-btn '+(isTrack?'seg-active-track':'')+'" onclick="setMode(\''+esc(r.id)+'\',\'track\',this)">Track</button>' +
             '<button class="seg-btn '+(isBlock?'seg-active-block':'')+'" onclick="setMode(\''+esc(r.id)+'\',\'block\',this)">Block</button>' +
           '</div>' +
         '</div>' +
+        '<div class="rule-desc">'+esc(r.description)+'</div>' +
         '<div class="rule-foot">'+sevTag(r.severity)+'</div>' +
         '</div>';
     }).join('');
