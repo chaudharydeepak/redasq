@@ -29,6 +29,7 @@ type Prompt struct {
 	RedactedPrompt string
 	Status         Status
 	Matches        []inspector.Match
+	DurationMS     int64
 }
 
 type Store struct {
@@ -59,7 +60,8 @@ func (s *Store) migrate() error {
 			prompt           TEXT    NOT NULL,
 			status           TEXT    NOT NULL DEFAULT 'clean',
 			matches          TEXT    NOT NULL DEFAULT '[]',
-			redacted_prompt  TEXT    NOT NULL DEFAULT ''
+			redacted_prompt  TEXT    NOT NULL DEFAULT '',
+			duration_ms      INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS idx_ts     ON prompts(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_status ON prompts(status);
@@ -67,20 +69,29 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return err
 	}
-	// Add redacted_prompt column to existing databases that predate this migration.
+	// Add columns to existing databases that predate these migrations.
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN redacted_prompt TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE prompts ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
-func (s *Store) SavePrompt(p Prompt) error {
+func (s *Store) SavePrompt(p Prompt) (int64, error) {
 	b, _ := json.Marshal(p.Matches)
 	if b == nil {
 		b = []byte("[]")
 	}
-	_, err := s.db.Exec(
-		`INSERT INTO prompts (timestamp, host, path, prompt, status, matches, redacted_prompt) VALUES (?,?,?,?,?,?,?)`,
-		p.Timestamp.Unix(), p.Host, p.Path, p.Prompt, string(p.Status), string(b), p.RedactedPrompt,
+	res, err := s.db.Exec(
+		`INSERT INTO prompts (timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms) VALUES (?,?,?,?,?,?,?,?)`,
+		p.Timestamp.Unix(), p.Host, p.Path, p.Prompt, string(p.Status), string(b), p.RedactedPrompt, p.DurationMS,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) UpdateDuration(id, durationMS int64) error {
+	_, err := s.db.Exec(`UPDATE prompts SET duration_ms=? WHERE id=?`, durationMS, id)
 	return err
 }
 
@@ -100,12 +111,12 @@ func (s *Store) ListPrompts(statusFilter string, limit, offset int) ([]Prompt, e
 	var err error
 	if statusFilter == "" || statusFilter == "all" {
 		rows, err = s.db.Query(
-			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms
 			 FROM prompts ORDER BY timestamp DESC LIMIT ? OFFSET ?`, limit, offset,
 		)
 	} else {
 		rows, err = s.db.Query(
-			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms
 			 FROM prompts WHERE status = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
 			statusFilter, limit, offset,
 		)
@@ -119,12 +130,12 @@ func (s *Store) ListPrompts(statusFilter string, limit, offset int) ([]Prompt, e
 
 func (s *Store) GetPrompt(id int64) (*Prompt, error) {
 	row := s.db.QueryRow(
-		`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt FROM prompts WHERE id = ?`, id,
+		`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms FROM prompts WHERE id = ?`, id,
 	)
 	var p Prompt
 	var ts int64
 	var matchJSON string
-	if err := row.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt); err != nil {
+	if err := row.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS); err != nil {
 		return nil, err
 	}
 	p.Timestamp = time.Unix(ts, 0)
@@ -138,7 +149,7 @@ func scanPrompts(rows *sql.Rows) ([]Prompt, error) {
 		var p Prompt
 		var ts int64
 		var matchJSON string
-		if err := rows.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt); err != nil {
+		if err := rows.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS); err != nil {
 			return nil, err
 		}
 		p.Timestamp = time.Unix(ts, 0)
@@ -180,25 +191,25 @@ func (s *Store) ExportPrompts(from, to time.Time) ([]Prompt, error) {
 	switch {
 	case !from.IsZero() && !to.IsZero():
 		rows, err = s.db.Query(
-			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms
 			 FROM prompts WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC`,
 			from.Unix(), to.Unix(),
 		)
 	case !from.IsZero():
 		rows, err = s.db.Query(
-			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms
 			 FROM prompts WHERE timestamp >= ? ORDER BY timestamp ASC`,
 			from.Unix(),
 		)
 	case !to.IsZero():
 		rows, err = s.db.Query(
-			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms
 			 FROM prompts WHERE timestamp <= ? ORDER BY timestamp ASC`,
 			to.Unix(),
 		)
 	default:
 		rows, err = s.db.Query(
-			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms
 			 FROM prompts ORDER BY timestamp ASC`,
 		)
 	}

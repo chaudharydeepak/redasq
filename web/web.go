@@ -85,6 +85,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 		Matches        []inspector.Match `json:"matches"`
 		Prompt         string            `json:"prompt"`
 		RedactedPrompt string            `json:"redacted_prompt,omitempty"`
+		DurationMS     int64             `json:"duration_ms"`
 	}
 	out := make([]row, 0, len(prompts))
 	for _, p := range prompts {
@@ -111,6 +112,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 			Matches:        p.Matches,
 			Prompt:         truncate(p.Prompt, 400),
 			RedactedPrompt: truncate(p.RedactedPrompt, 400),
+			DurationMS:     p.DurationMS,
 		})
 	}
 	type response struct {
@@ -727,10 +729,11 @@ var dashboardHTML = `<!DOCTYPE html>
                 <th>Host</th>
                 <th>Path</th>
                 <th>Rules Hit</th>
+                <th>Latency</th>
               </tr>
             </thead>
             <tbody id="prompts-body">
-              <tr class="empty"><td colspan="5">No prompts intercepted yet</td></tr>
+              <tr class="empty"><td colspan="6">No prompts intercepted yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -861,7 +864,7 @@ function toggleDetail(id) {
   var detail = document.createElement('tr');
   detail.id = 'detail-'+id;
   detail.className = 'detail-row';
-  detail.innerHTML = '<td colspan="5"><div class="detail-inner">' +
+  detail.innerHTML = '<td colspan="6"><div class="detail-inner">' +
     banner + promptSection +
     '<div class="detail-section-lbl" style="margin-top:10px;margin-bottom:6px">Matched Rules</div>' +
     '<div class="match-list">'+matchHTML+'</div>' +
@@ -915,7 +918,7 @@ async function refresh() {
     var wasOpen = openRow;
 
     document.getElementById('prompts-body').innerHTML = prompts.length === 0
-      ? '<tr class="empty"><td colspan="5">' +
+      ? '<tr class="empty"><td colspan="6">' +
           (currentFilter !== 'all'
             ? 'No ' + esc(currentFilter) + ' prompts in this time window.'
             : 'No prompts intercepted yet.<br><span style="font-size:12px;font-weight:400">Route your AI traffic through the proxy to start seeing requests here.</span>'
@@ -939,12 +942,18 @@ async function refresh() {
             }
             rulesHTML = '<div style="display:flex;flex-wrap:wrap;gap:2px;align-items:center">' + chips.join('') + '</div>';
           }
+          var dur = p.duration_ms > 0
+            ? (p.duration_ms >= 1000
+                ? (p.duration_ms/1000).toFixed(1)+'s'
+                : p.duration_ms+'ms')
+            : '<span style="color:var(--text-3)">—</span>';
           return '<tr id="row-'+p.id+'" class="row-'+p.status+'" onclick="toggleDetail('+p.id+')">' +
             '<td class="mono muted">'+esc(p.time)+'</td>' +
             '<td>'+statusTag(p.status)+'</td>' +
             '<td style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.host)+'">'+esc(p.host)+'</td>' +
             '<td class="mono muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.path)+'">'+esc(shortPath)+'</td>' +
             '<td>'+rulesHTML+'</td>' +
+            '<td class="mono muted" style="text-align:right;white-space:nowrap">'+dur+'</td>' +
             '</tr>';
         }).join('');
 

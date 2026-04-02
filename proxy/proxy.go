@@ -152,7 +152,7 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		if isTelemetry(body) {
 			_, summary := extractTelemetryInfo(body)
 			debugf("TELEMETRY: %s", summary)
-			p.db.SavePrompt(store.Prompt{
+			_, _ = p.db.SavePrompt(store.Prompt{
 				Timestamp: time.Now(),
 				Host:      stripPort(hostport),
 				Path:      req.URL.Path,
@@ -192,7 +192,8 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		// inspect and redact them; we just don't terminate the connection.
 		allowBlock := !isCopilotBackground(body)
 
-		if blocked, msg := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock); blocked {
+		blocked, msg, savedID := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock)
+		if blocked {
 			if strings.Contains(stripPort(hostport), "claude.ai") {
 				writeHTTPError(tlsClient, 400, msg)
 			} else {
@@ -201,9 +202,14 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 			return
 		}
 
-		// Forward to real upstream and pipe response back
-		if err := p.forward(tlsClient, req, hostport); err != nil {
+		// Forward to real upstream and pipe response back.
+		// Measure TTFB (request sent → response headers received) and persist it.
+		ttfb, err := p.forward(tlsClient, req, hostport)
+		if err != nil {
 			return
+		}
+		if savedID > 0 {
+			p.db.UpdateDuration(savedID, ttfb.Milliseconds())
 		}
 	}
 }
@@ -261,7 +267,8 @@ func (p *proxy) dialUpstream(hostport string) (net.Conn, error) {
 }
 
 // forward dials the real upstream, sends the request, and writes the response back to dst.
-func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) error {
+// Returns the time-to-first-byte (request sent → response headers received).
+func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) (time.Duration, error) {
 	hostname := hostport
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		hostname = h
@@ -269,7 +276,7 @@ func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) error 
 
 	tcpConn, err := p.dialUpstream(hostport)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	up := tls.Client(tcpConn, &tls.Config{
 		ServerName: hostname,
@@ -277,26 +284,28 @@ func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) error 
 	})
 	if err := up.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
 		tcpConn.Close()
-		return err
+		return 0, err
 	}
 	if err := up.Handshake(); err != nil {
 		tcpConn.Close()
-		return err
+		return 0, err
 	}
 	up.SetDeadline(time.Time{})
 	defer up.Close()
 
+	start := time.Now()
 	if err := req.Write(up); err != nil {
-		return err
+		return 0, err
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(up), req)
+	ttfb := time.Since(start)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 
-	return resp.Write(dst)
+	return ttfb, resp.Write(dst)
 }
 
 // isTelemetry reports whether the body is an analytics/telemetry payload
@@ -393,10 +402,10 @@ func isCopilotBackground(body []byte) bool {
 // inspectAndStore stores every intercepted prompt.
 // redactions are track-mode matches already applied to the forwarded body.
 // allowBlock: if false, block-mode rules are recorded but the request is not terminated.
-// Returns (blocked, assistantMessage).
-func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombined, displayPrompt string, redactions []inspector.Match, allowBlock bool) (bool, string) {
+// Returns (blocked, assistantMessage, savedRowID). savedRowID is 0 if nothing was stored.
+func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombined, displayPrompt string, redactions []inspector.Match, allowBlock bool) (bool, string, int64) {
 	if combined == "" && len(redactions) == 0 {
-		return false, ""
+		return false, "", 0
 	}
 
 	result := p.eng.Inspect(combined)
@@ -418,20 +427,22 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 	if storedPrompt == "" {
 		storedPrompt = combined
 	}
+	// Always redact before storing — sensitive values must never land in the DB.
 	redactedDisplay, _ := p.eng.RedactText(storedPrompt)
 
 	debugf("STORE: status=%s host=%s rules=%d", status, stripPort(host), len(allMatches))
-	err := p.db.SavePrompt(store.Prompt{
+	savedID, err := p.db.SavePrompt(store.Prompt{
 		Timestamp:      time.Now(),
 		Host:           stripPort(host),
 		Path:           req.URL.Path,
-		Prompt:         storedPrompt,
+		Prompt:         redactedDisplay,
 		RedactedPrompt: redactedDisplay,
 		Status:         status,
 		Matches:        allMatches,
 	})
 	if err != nil {
 		log.Printf("store ERROR: %v", err)
+		savedID = 0
 	} else if status != store.StatusClean {
 		names := make([]string, 0, len(allMatches))
 		for _, m := range allMatches {
@@ -441,7 +452,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 	}
 
 	if !result.Blocked || !allowBlock {
-		return false, ""
+		return false, "", savedID
 	}
 
 	var ruleNames []string
@@ -456,7 +467,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 		msg += "- " + name + "\n"
 	}
 	msg += "\nThis request was **not forwarded** to the AI. Please remove the sensitive data and try again."
-	return true, msg
+	return true, msg, savedID
 }
 
 // writeHTTPError writes a plain HTTP error response for non-API clients (e.g. claude.ai web).
