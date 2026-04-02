@@ -95,7 +95,12 @@ func printSetup(certPath string, port, webPort int, upstreamProxy string) {
 		fmt.Printf("Install CA (run once):\n  certutil -addstore -f ROOT %s\n\n", certPath)
 	}
 
-	fmt.Printf("Set proxy:\n  export HTTP_PROXY=http://localhost:%d\n  export HTTPS_PROXY=http://localhost:%d\n  export NO_PROXY=localhost,127.0.0.1\n\n", port, port)
+	switch runtime.GOOS {
+	case "windows":
+		fmt.Printf("Set proxy:\n  $env:HTTP_PROXY=\"http://localhost:%d\"\n  $env:HTTPS_PROXY=\"http://localhost:%d\"\n  $env:NO_PROXY=\"localhost,127.0.0.1\"\n\n", port, port)
+	default:
+		fmt.Printf("Set proxy:\n  export HTTP_PROXY=http://localhost:%d\n  export HTTPS_PROXY=http://localhost:%d\n  export NO_PROXY=localhost,127.0.0.1\n\n", port, port)
+	}
 	fmt.Printf("Dashboard:  http://localhost:%d\n", webPort)
 	fmt.Printf("Rules file: %s\n", filepath.Join(filepath.Dir(certPath), "rules.json"))
 	if upstreamProxy != "" {
