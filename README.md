@@ -44,7 +44,9 @@ All other HTTPS traffic is tunnelled through unchanged.
 | AWS Secret Key | High | Block |
 | OpenAI API Key (`sk-…`) | High | Block |
 | Anthropic API Key (`sk-ant-…`) | High | Block |
-| GitHub Token (`ghp_`, `gho_`, …) | High | Block |
+| GitHub Token (`ghp_`, `gho_`, `github_pat_`, …) | High | Block |
+| HTTP Basic Auth credential | High | Block |
+| HTTP Bearer token | High | Block |
 | Private Key (PEM block) | High | Block |
 | Social Security Number | High | Block |
 | Credit Card Number | High | Block |
@@ -157,10 +159,28 @@ Changes made in the dashboard are written back to `rules.json` automatically and
 ## Options
 
 ```
---port       Proxy port (default: 8080)
---web-port   Dashboard port (default: 7778)
---ca-dir     Directory for CA cert, key, and database (default: ~/.prompt-guard)
+--port            Proxy port (default: 8080)
+--web-port        Dashboard port (default: 7778)
+--ca-dir          Directory for CA cert, key, and database (default: ~/.prompt-guard)
+--upstream-proxy  Corporate proxy to chain through (e.g. http://proxy.corp.com:8080)
+--debug           Enable verbose request/connection logging
 ```
+
+### Corporate proxy chaining
+
+If you're behind a corporate proxy, pass it via `--upstream-proxy`:
+
+```bash
+./prompt-guard --upstream-proxy http://proxy.corp.com:8080
+```
+
+With basic auth:
+
+```bash
+./prompt-guard --upstream-proxy http://user:pass@proxy.corp.com:8080
+```
+
+Prompt Guard will CONNECT through the corporate proxy for all outbound traffic, while still intercepting AI API requests.
 
 ## Architecture
 
