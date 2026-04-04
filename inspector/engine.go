@@ -10,8 +10,24 @@ type Result struct {
 
 // Engine runs all active rules against text and returns matches.
 type Engine struct {
-	mu    sync.RWMutex
-	rules []Rule
+	mu        sync.RWMutex
+	rules     []Rule
+	agentMode bool
+}
+
+// SetAgentMode enables or disables agent mode. In agent mode all traffic is
+// redacted regardless of per-rule mode — nothing is blocked.
+func (e *Engine) SetAgentMode(on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.agentMode = on
+}
+
+// AgentMode returns whether agent mode is currently active.
+func (e *Engine) AgentMode() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.agentMode
 }
 
 func New() *Engine {
@@ -61,7 +77,8 @@ func (e *Engine) SetMode(ruleID string, mode Mode) bool {
 	return false
 }
 
-// RedactText replaces all track-mode rule matches in the extracted prompt text.
+// RedactText replaces rule matches in the extracted prompt text.
+// In agent mode all rules are applied regardless of their configured mode.
 // Returns the redacted text and one Match per rule that fired.
 func (e *Engine) RedactText(text string) (string, []Match) {
 	e.mu.RLock()
@@ -70,7 +87,7 @@ func (e *Engine) RedactText(text string) (string, []Match) {
 	result := text
 	var matches []Match
 	for _, rule := range e.rules {
-		if rule.Mode != ModeTrack {
+		if !e.agentMode && rule.Mode != ModeTrack {
 			continue
 		}
 		loc := rule.Pattern.FindStringIndex(result)
@@ -104,14 +121,15 @@ func (e *Engine) RedactText(text string) (string, []Match) {
 	return result, matches
 }
 
-// RedactBodyForForwarding applies all track-mode replacements to the raw request body.
+// RedactBodyForForwarding applies track-mode replacements to the raw request body.
+// In agent mode all rules are applied regardless of their configured mode.
 func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	s := string(body)
 	for _, rule := range e.rules {
-		if rule.Mode == ModeTrack {
+		if e.agentMode || rule.Mode == ModeTrack {
 			s = rule.Pattern.ReplaceAllString(s, rule.Replacement)
 		}
 	}
@@ -121,6 +139,10 @@ func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 func (e *Engine) Inspect(text string) Result {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+
+	if e.agentMode {
+		return Result{} // agent mode: never block, redaction handled separately
+	}
 
 	var result Result
 	for _, rule := range e.rules {

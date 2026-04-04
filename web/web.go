@@ -39,6 +39,19 @@ func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) 
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		apiStats(w, r, db)
 	})
+	mux.HandleFunc("/api/agent-mode", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			next := !eng.AgentMode()
+			eng.SetAgentMode(next)
+			val := "false"
+			if next {
+				val = "true"
+			}
+			db.SetSetting("agent_mode", val)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"agent_mode":%v}`, eng.AgentMode())
+	})
 	mux.HandleFunc("/api/export", func(w http.ResponseWriter, r *http.Request) {
 		apiExport(w, r, db)
 	})
@@ -94,6 +107,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 		Prompt         string            `json:"prompt"`
 		RedactedPrompt string            `json:"redacted_prompt,omitempty"`
 		DurationMS     int64             `json:"duration_ms"`
+		AgentMode      bool              `json:"agent_mode"`
 	}
 	out := make([]row, 0, len(prompts))
 	for _, p := range prompts {
@@ -121,6 +135,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 			Prompt:         truncate(p.Prompt, 400),
 			RedactedPrompt: truncate(p.RedactedPrompt, 400),
 			DurationMS:     p.DurationMS,
+			AgentMode:      p.AgentMode,
 		})
 	}
 	type response struct {
@@ -411,6 +426,14 @@ var dashboardHTML = `<!DOCTYPE html>
                      box-shadow:0 0 0 0 var(--success); animation:pulse 2s infinite; flex-shrink:0; }
   @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(16,185,129,.6)} 70%{box-shadow:0 0 0 8px rgba(16,185,129,0)} 100%{box-shadow:0 0 0 0 rgba(16,185,129,0)} }
   .hd-spacer { flex: 1; }
+  .agent-mode-btn { display:flex; align-items:center; gap:5px; border:1px solid var(--border);
+                    background:transparent; color:var(--text-2); border-radius:7px;
+                    height:32px; padding:0 10px; font-size:10px; font-weight:600; letter-spacing:.4px;
+                    cursor:pointer; text-transform:uppercase; transition:all .15s; flex-shrink:0; font-family:inherit; }
+  .agent-mode-btn:hover { background:var(--bg-raised); border-color:var(--text-3); color:var(--text-1); }
+  .agent-mode-state { font-size:10px; font-weight:700; color:var(--text-3); }
+  .agent-mode-btn.is-on { background:rgba(245,158,11,.12); border-color:rgba(245,158,11,.4); color:#f59e0b; }
+  .agent-mode-btn.is-on .agent-mode-state { color:#f59e0b; }
   /* Icon buttons: proper SVG icons instead of emoji, square with defined size */
   .icon-btn { border: 1px solid var(--border); background: transparent; color: var(--text-2);
               border-radius: 7px; width: 32px; height: 32px; cursor: pointer; font-family: inherit;
@@ -640,6 +663,12 @@ var dashboardHTML = `<!DOCTYPE html>
   <!-- Download icon (Heroicons outline) -->
   <button class="icon-btn" onclick="toggleExport()" title="Export prompts" id="export-btn">
     <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0-4-4m4 4 4-4M4 20h16"/></svg>
+  </button>
+  <!-- Agent mode toggle -->
+  <button onclick="toggleAgentMode()" id="agent-btn" class="agent-mode-btn"
+    title="Agent Mode: when ON, all rules switch to redact — sensitive data is masked before reaching the AI but requests are never blocked. Use when running long-lived agents that must not be interrupted.">
+    <span id="agent-btn-label">Agent Mode</span>
+    <span id="agent-btn-state" class="agent-mode-state">OFF</span>
   </button>
   <!-- Trash / clear all icon -->
   <button class="icon-btn" onclick="clearAllPrompts()" title="Clear all prompts" id="clear-btn">
@@ -959,9 +988,10 @@ async function refresh() {
                 ? (p.duration_ms/1000).toFixed(1)+'s'
                 : p.duration_ms+'ms')
             : '<span style="color:var(--text-3)">—</span>';
+          var agentBadge = p.agent_mode ? '<span style="margin-left:4px;font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#f59e0b;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:1px 5px;">agent</span>' : '';
           return '<tr id="row-'+p.id+'" class="row-'+p.status+'" onclick="toggleDetail('+p.id+')">' +
             '<td class="mono muted">'+esc(p.time)+'</td>' +
-            '<td>'+statusTag(p.status)+'</td>' +
+            '<td>'+statusTag(p.status)+agentBadge+'</td>' +
             '<td style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.host)+'">'+esc(p.host)+'</td>' +
             '<td class="mono muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.path)+'">'+esc(shortPath)+'</td>' +
             '<td>'+rulesHTML+'</td>' +
@@ -1019,6 +1049,19 @@ async function setMode(ruleID, mode, btn) {
   }
 }
 
+async function toggleAgentMode() {
+  var res = await fetch('/api/agent-mode', { method: 'POST' });
+  var data = await res.json();
+  updateAgentModeUI(data.agent_mode);
+}
+
+function updateAgentModeUI(on) {
+  var btn = document.getElementById('agent-btn');
+  var state = document.getElementById('agent-btn-state');
+  btn.classList.toggle('is-on', on);
+  state.textContent = on ? 'ON' : 'OFF';
+}
+
 async function clearAllPrompts() {
   if (!confirm('Clear all intercepted prompts? This cannot be undone.')) return;
   await fetch('/api/prompts', { method: 'DELETE' });
@@ -1028,6 +1071,7 @@ async function clearAllPrompts() {
 
 refresh();
 loadRules();
+fetch('/api/agent-mode').then(function(r){ return r.json(); }).then(function(d){ updateAgentModeUI(d.agent_mode); });
 setInterval(refresh, 3000);
 
 function toggleExport() {

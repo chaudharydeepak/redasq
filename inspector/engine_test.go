@@ -359,3 +359,47 @@ func TestRedactBodyForForwarding_Email(t *testing.T) {
 		t.Error("RedactBodyForForwarding: email was not redacted in raw body")
 	}
 }
+
+func TestAgentMode_InspectNeverBlocks(t *testing.T) {
+	eng := New()
+	eng.SetAgentMode(true)
+	result := eng.Inspect("my SSN is 123-45-6789")
+	if result.Blocked {
+		t.Error("AgentMode: Inspect should never block when agent mode is on")
+	}
+	if len(result.Matches) > 0 {
+		t.Error("AgentMode: Inspect should return no matches when agent mode is on")
+	}
+}
+
+func TestAgentMode_RedactTextAppliesBlockRules(t *testing.T) {
+	eng := New()
+	eng.SetAgentMode(true)
+	redacted, matches := eng.RedactText("my SSN is 123-45-6789")
+	if strings.Contains(redacted, "123-45-6789") {
+		t.Error("AgentMode: RedactText should redact block-mode rules when agent mode is on")
+	}
+	if len(matches) == 0 {
+		t.Error("AgentMode: RedactText should return matches for block-mode rules when agent mode is on")
+	}
+}
+
+func TestAgentMode_RedactBodyForwardingAppliesBlockRules(t *testing.T) {
+	eng := New()
+	eng.SetAgentMode(true)
+	body := []byte(`{"messages":[{"role":"user","content":"my SSN is 123-45-6789"}]}`)
+	redacted := eng.RedactBodyForForwarding(body)
+	if strings.Contains(string(redacted), "123-45-6789") {
+		t.Error("AgentMode: RedactBodyForForwarding should redact block-mode rules when agent mode is on")
+	}
+}
+
+func TestAgentMode_OffRestoresNormalBehavior(t *testing.T) {
+	eng := New()
+	eng.SetAgentMode(true)
+	eng.SetAgentMode(false)
+	result := eng.Inspect("my SSN is 123-45-6789")
+	if !result.Blocked {
+		t.Error("AgentMode off: Inspect should block SSN when agent mode is off")
+	}
+}

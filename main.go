@@ -70,6 +70,11 @@ func main() {
 		})
 	}
 
+	if db.GetSetting("agent_mode", "false") == "true" {
+		eng.SetAgentMode(true)
+		log.Printf("agent mode: ON (persisted from last run)")
+	}
+
 	printSetup(ca.CertPath, *port, *webPort, *upstreamProxy)
 	web.Start(*webPort, db, eng, filepath.Join(*caDir, "rules.json"))
 	log.Fatal(proxy.Start(*port, ca, db, eng, *upstreamProxy))

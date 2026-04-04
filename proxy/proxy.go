@@ -439,6 +439,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 		RedactedPrompt: redactedDisplay,
 		Status:         status,
 		Matches:        allMatches,
+		AgentMode:      p.eng.AgentMode(),
 	})
 	if err != nil {
 		log.Printf("store ERROR: %v", err)

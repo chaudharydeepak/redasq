@@ -30,6 +30,7 @@ type Prompt struct {
 	Status         Status
 	Matches        []inspector.Match
 	DurationMS     int64
+	AgentMode      bool
 }
 
 type Store struct {
@@ -61,7 +62,12 @@ func (s *Store) migrate() error {
 			status           TEXT    NOT NULL DEFAULT 'clean',
 			matches          TEXT    NOT NULL DEFAULT '[]',
 			redacted_prompt  TEXT    NOT NULL DEFAULT '',
-			duration_ms      INTEGER NOT NULL DEFAULT 0
+			duration_ms      INTEGER NOT NULL DEFAULT 0,
+			agent_mode       INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE IF NOT EXISTS settings (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_ts     ON prompts(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_status ON prompts(status);
@@ -72,7 +78,23 @@ func (s *Store) migrate() error {
 	// Add columns to existing databases that predate these migrations.
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN redacted_prompt TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`)
+	s.db.Exec(`ALTER TABLE prompts ADD COLUMN agent_mode INTEGER NOT NULL DEFAULT 0`)
 	return nil
+}
+
+// GetSetting returns a persisted setting value, or the given default if not set.
+func (s *Store) GetSetting(key, defaultVal string) string {
+	var val string
+	if err := s.db.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&val); err != nil {
+		return defaultVal
+	}
+	return val
+}
+
+// SetSetting persists a key-value setting.
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(`INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
 }
 
 func (s *Store) SavePrompt(p Prompt) (int64, error) {
@@ -80,9 +102,13 @@ func (s *Store) SavePrompt(p Prompt) (int64, error) {
 	if b == nil {
 		b = []byte("[]")
 	}
+	agentModeInt := 0
+	if p.AgentMode {
+		agentModeInt = 1
+	}
 	res, err := s.db.Exec(
-		`INSERT INTO prompts (timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms) VALUES (?,?,?,?,?,?,?,?)`,
-		p.Timestamp.Unix(), p.Host, p.Path, p.Prompt, string(p.Status), string(b), p.RedactedPrompt, p.DurationMS,
+		`INSERT INTO prompts (timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode) VALUES (?,?,?,?,?,?,?,?,?)`,
+		p.Timestamp.Unix(), p.Host, p.Path, p.Prompt, string(p.Status), string(b), p.RedactedPrompt, p.DurationMS, agentModeInt,
 	)
 	if err != nil {
 		return 0, err
@@ -111,12 +137,12 @@ func (s *Store) ListPrompts(statusFilter string, limit, offset int) ([]Prompt, e
 	var err error
 	if statusFilter == "" || statusFilter == "all" {
 		rows, err = s.db.Query(
-			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode
 			 FROM prompts ORDER BY timestamp DESC LIMIT ? OFFSET ?`, limit, offset,
 		)
 	} else {
 		rows, err = s.db.Query(
-			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms
+			`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode
 			 FROM prompts WHERE status = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
 			statusFilter, limit, offset,
 		)
@@ -130,15 +156,17 @@ func (s *Store) ListPrompts(statusFilter string, limit, offset int) ([]Prompt, e
 
 func (s *Store) GetPrompt(id int64) (*Prompt, error) {
 	row := s.db.QueryRow(
-		`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms FROM prompts WHERE id = ?`, id,
+		`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode FROM prompts WHERE id = ?`, id,
 	)
 	var p Prompt
 	var ts int64
 	var matchJSON string
-	if err := row.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS); err != nil {
+	var agentModeInt int
+	if err := row.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt); err != nil {
 		return nil, err
 	}
 	p.Timestamp = time.Unix(ts, 0)
+	p.AgentMode = agentModeInt == 1
 	_ = json.Unmarshal([]byte(matchJSON), &p.Matches)
 	return &p, nil
 }
@@ -149,10 +177,12 @@ func scanPrompts(rows *sql.Rows) ([]Prompt, error) {
 		var p Prompt
 		var ts int64
 		var matchJSON string
-		if err := rows.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS); err != nil {
+		var agentModeInt int
+		if err := rows.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt); err != nil {
 			return nil, err
 		}
 		p.Timestamp = time.Unix(ts, 0)
+		p.AgentMode = agentModeInt == 1
 		_ = json.Unmarshal([]byte(matchJSON), &p.Matches)
 		out = append(out, p)
 	}

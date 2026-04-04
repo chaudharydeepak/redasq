@@ -29,6 +29,7 @@ The risk is well-documented:
 - **Web dashboard** — live feed of all intercepted prompts with matched snippets and status
 - **12 built-in rules** — credentials, PII, tokens, private keys
 - **Live rule editing** — change rule modes in the dashboard; changes are written back to `rules.json` instantly
+- **Agent mode** — one-click toggle to switch all rules to redact so long-running agents are never hard-blocked; state persists across restarts; each request tagged in the dashboard
 - **SQLite persistence** — full audit log across restarts
 - **Single binary** — no runtime dependencies
 
@@ -130,6 +131,21 @@ Set the proxy directly in VS Code settings (`Cmd+,`):
 
 Then restart VS Code. Traffic from all Copilot models will flow through the proxy.
 
+
+## Agent Mode
+
+When running long-lived agentic workflows (Claude Code, Cursor agents, automated pipelines), requests may get hard-blocked mid-task if sensitive data appears in the conversation context — causing the agent to fail.
+
+**Agent Mode** solves this. Toggle it from the dashboard header:
+
+- **OFF (default)** — rules fire as configured. Block-mode rules reject the request outright; the agent or IDE receives an error and stops.
+- **ON** — all rules switch to redact. Sensitive values are masked with `[REDACTED]` before the request is forwarded, but the request always goes through. The agent keeps running.
+
+Sensitive data is still protected in both modes — the difference is whether a matched value stops the request or is silently redacted.
+
+Agent mode state persists across proxy restarts. Each intercepted request is tagged in the dashboard so you can see which calls were made while agent mode was active.
+
+**When to use agent mode OFF:** if you want strict enforcement and are OK with agents being interrupted when sensitive data is detected — for example, during a code review or one-off task where you want to know immediately if something sensitive is being sent.
 
 ## Customizing Rules
 
