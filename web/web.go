@@ -450,14 +450,14 @@ var dashboardHTML = `<!DOCTYPE html>
                   stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 
   /* ── Layout ────────────────────────────────────── */
-  .pg-main { padding: 18px 20px; max-width: 1280px; margin: 0 auto; }
-  .pg-cols { display: grid; grid-template-columns: 1fr 320px; gap: 14px; align-items: start; }
+  .pg-main { padding: 18px 24px; max-width: 100%; margin: 0 auto; }
+  .pg-cols { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
   @media(max-width:880px) { .pg-cols { grid-template-columns: 1fr; } }
 
   /* ── Metric tiles ──────────────────────────────── */
   /* 7-column grid; last 2 (telemetry, top-host) are utility/metadata and narrower visually */
-  .tiles { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-bottom: 18px; }
-  @media(max-width:1000px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
+  .tiles { display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px; margin-bottom: 18px; }
+  @media(max-width:1100px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
   @media(max-width:640px)  { .tiles { grid-template-columns: repeat(2, 1fr); } }
 
   .tile { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px;
@@ -527,14 +527,22 @@ var dashboardHTML = `<!DOCTYPE html>
   ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
   /* ── Table ─────────────────────────────────────── */
-  .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .pg-tbl { width: 100%; border-collapse: collapse; }
+  .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; min-height: 320px; }
+  .pg-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .pg-tbl th:nth-child(1) { width: 130px; }  /* Time */
+  .pg-tbl th:nth-child(2) { width: 90px; }   /* Status */
+  .pg-tbl th:nth-child(3) { width: 160px; }  /* Host */
+  .pg-tbl th:nth-child(4) { width: 130px; }  /* Path */
+  .pg-tbl th:nth-child(5) { width: 160px; }  /* Rules Hit */
+  .pg-tbl th:nth-child(6) { width: 70px; }   /* Latency */
+  .pg-tbl th:nth-child(7) { width: 140px; }  /* Tokens in/out */
+  .pg-tbl th:nth-child(8) { width: 90px; }   /* Session */
   /* Column headers: tighter letter-spacing, standard Datadog table header style */
   .pg-tbl th { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
                color: var(--text-3); padding: 8px 16px; border-bottom: 1px solid var(--border);
                background: var(--bg-raised); white-space: nowrap; text-align: left; }
   /* Data rows: taller for breathing room — 11px vertical padding is industry standard for dense tables */
-  .pg-tbl td { padding: 11px 16px; border-bottom: 1px solid var(--border-sub); color: var(--text-1);
+  .pg-tbl td { padding: 11px 16px; border-bottom: 1px solid var(--border-sub); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                vertical-align: middle; white-space: nowrap; font-size: 13px; }
   .pg-tbl tr:last-child td { border-bottom: none; }
   .pg-tbl tbody tr { cursor: pointer; transition: background .1s; }
@@ -545,6 +553,9 @@ var dashboardHTML = `<!DOCTYPE html>
   /* Monospace: slightly larger than before, legible at 14px base */
   .pg-tbl .mono  { font-family: 'SF Mono','Fira Code',ui-monospace,Menlo,monospace; font-size: 12px; }
   /* Empty state: more breathing room, actionable message */
+  .pg-tbl .td-r    { text-align: left; }
+  .pg-tbl .td-host { font-weight: 600; }
+  .pg-tbl .td-path { font-family: 'SF Mono','Fira Code',ui-monospace,Menlo,monospace; font-size: 12px; color: var(--text-3); }
   .pg-tbl .empty td { color: var(--text-3); text-align: center; padding: 56px 36px; cursor: default;
                        font-size: 13px; line-height: 1.6; }
   /* Pagination bar */
@@ -781,7 +792,7 @@ var dashboardHTML = `<!DOCTYPE html>
                 <th>Path</th>
                 <th>Rules Hit</th>
                 <th>Latency</th>
-                <th>Out Tokens</th>
+                <th>Tokens (in/out)</th>
                 <th>Session</th>
               </tr>
             </thead>
@@ -1018,16 +1029,16 @@ async function refresh() {
           var agentBadge = p.agent_mode ? '<span style="margin-left:4px;font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#f59e0b;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:1px 5px;">agent</span>' : '';
           var sid = p.session_id || '';
           var sessionCell = sid
-            ? '<td class="mono muted" title="'+esc(sid)+'" style="white-space:nowrap;font-size:11px">'+esc(sid.slice(0,8))+'</td>'
-            : '<td class="mono muted" style="color:var(--text-3)">—</td>';
+            ? '<td class="mono muted td-r" title="'+esc(sid)+'">'+esc(sid.slice(0,8))+'</td>'
+            : '<td class="mono muted td-r" style="color:var(--text-3)">—</td>';
           return '<tr id="row-'+p.id+'" class="row-'+p.status+'" onclick="toggleDetail('+p.id+')">' +
             '<td class="mono muted">'+esc(p.time)+'</td>' +
             '<td>'+statusTag(p.status)+agentBadge+'</td>' +
-            '<td style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.host)+'">'+esc(p.host)+'</td>' +
-            '<td class="mono muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.path)+'">'+esc(shortPath)+'</td>' +
+            '<td class="td-host" title="'+esc(p.host)+'">'+esc(p.host)+'</td>' +
+            '<td class="mono muted td-path" title="'+esc(p.path)+'">'+esc(shortPath)+'</td>' +
             '<td>'+rulesHTML+'</td>' +
-            '<td class="mono muted" style="text-align:right;white-space:nowrap">'+dur+'</td>' +
-            '<td class="mono muted" style="text-align:right;white-space:nowrap">'+(p.output_tokens ? fmtTokens(p.output_tokens) : '—')+'</td>' +
+            '<td class="mono muted td-r">'+dur+'</td>' +
+            '<td class="mono muted td-r">'+(p.input_tokens||p.output_tokens ? fmtTokens(p.input_tokens||0)+' / '+fmtTokens(p.output_tokens||0) : '—')+'</td>' +
             sessionCell +
             '</tr>';
         }).join('');
