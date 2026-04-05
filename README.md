@@ -105,20 +105,21 @@ Dashboard:  http://localhost:7778
 Rules file: /Users/you/.prompt-guard/rules.json
 ```
 
-The CA cert is **not required** for CLI tools or IDE extensions — they trust the proxy automatically when the `HTTP_PROXY`/`HTTPS_PROXY` environment variables are set. Only install the cert if you want to route traffic from a browser or other tool that does its own TLS certificate verification.
+The CA cert is **not required** for most CLI tools. Only install it if you want to route traffic from a browser or tool that does its own TLS certificate verification.
 
 ### Using with Claude CLI / Claude Code
-
-Just set the proxy environment variables:
 
 ```bash
 export HTTP_PROXY=http://localhost:8080
 export HTTPS_PROXY=http://localhost:8080
 export NO_PROXY=localhost,127.0.0.1
+export NODE_EXTRA_CA_CERTS=~/.prompt-guard/ca.crt
 claude
 ```
 
-To avoid setting these every session, add them to your `~/.zshrc` (or `~/.bashrc`).
+`NODE_EXTRA_CA_CERTS` is required for Claude Code v2.1.84+ — newer versions verify TLS certificates and will reject the MITM cert without it. This variable scopes the trust to Node.js processes only (no system keychain changes needed).
+
+Add all four lines to your `~/.zshrc` (or `~/.bashrc`) to persist across sessions.
 
 ### Using with VS Code Copilot
 
