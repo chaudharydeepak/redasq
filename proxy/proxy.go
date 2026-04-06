@@ -148,7 +148,7 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 
 		debugf("REQUEST: %s %s%s body=%d bytes stream=%v accept=%s", req.Method, stripPort(hostport), req.URL.Path, len(body), IsStreaming(body), req.Header.Get("Accept"))
 		if Debug {
-			for _, h := range []string{"X-Session-Id","X-Request-Id","X-Vscode-Session-Id","X-Github-Session-Id","Vscode-Sessionid","Vscode-Machineid","X-Client-Session","Copilot-Session-Id"} {
+			for _, h := range []string{"X-Request-Id", "Vscode-Sessionid", "Vscode-Machineid", "X-Github-Api-Version"} {
 				if v := req.Header.Get(h); v != "" {
 					debugf("  HEADER %s: %s", h, v)
 				}
