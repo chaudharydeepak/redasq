@@ -670,8 +670,10 @@ var dashboardHTML = `<!DOCTYPE html>
 
 <header class="hd">
   <div class="hd-logo">
+    <a href="https://github.com/chaudharydeepak/prompt-guard" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit;">
     <img src="/favicon.svg" class="hd-shield" alt="Prompt Guard">
     <div class="hd-name">Prompt<em>Guard</em></div>
+    </a>
   </div>
   <div class="hd-sep"></div>
   <div class="hd-badge">PROXY</div>
