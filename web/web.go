@@ -597,6 +597,7 @@ var dashboardHTML = `<!DOCTYPE html>
             display: flex; align-items: center; gap: 9px; }
   .banner-blocked  { background: var(--danger-dim);  border: 1px solid rgba(239,68,68,.3);   color: var(--danger);  }
   .banner-redacted { background: var(--purple-dim);  border: 1px solid rgba(167,139,250,.3); color: var(--purple); }
+  .detail-wrap { padding: 16px 20px; display: grid; gap: 14px; }
   /* Match list */
   .match-list { display: flex; flex-direction: column; gap: 6px; }
   .match-item { display: flex; align-items: flex-start; gap: 12px; background: var(--bg-surface);
@@ -803,7 +804,7 @@ var dashboardHTML = `<!DOCTYPE html>
  </tr>
             </thead>
             <tbody id="prompts-body">
-              <tr class="empty"><td colspan="8">No prompts intercepted yet</td></tr>
+              <tr class="empty"><td colspan="9">No prompts intercepted yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -857,6 +858,7 @@ function updateThemeIcon(t) {
 }
 (function(){ updateThemeIcon(document.documentElement.getAttribute('data-theme')); })();
 
+
 function fmtTokens(n) {
   if (n >= 1000000) return (n/1000000).toFixed(1)+'M';
   if (n >= 1000)    return (n/1000).toFixed(1)+'K';
@@ -893,10 +895,11 @@ function setPageSize(n) {
 }
 
 function toggleDetail(id) {
-  if (openRow !== null) {
-    var old = document.getElementById('detail-'+openRow);
-    if (old) old.remove();
-    if (openRow === id) { openRow = null; return; }
+  var existing = document.getElementById('detail-'+id);
+  if (existing) {
+    existing.remove();
+    openRow = null;
+    return;
   }
   openRow = id;
   var anchor = document.getElementById('row-'+id);
@@ -937,9 +940,6 @@ function toggleDetail(id) {
           '</div></div>';
       }).join('');
 
-  var detail = document.createElement('tr');
-  detail.id = 'detail-'+id;
-  detail.className = 'detail-row';
   var tokenInfo = '';
   if (p.input_tokens || p.output_tokens) {
     tokenInfo = '<div style="font-size:11px;color:var(--text-3);margin-top:8px">'+
@@ -948,11 +948,18 @@ function toggleDetail(id) {
       '</div>';
   }
 
-  detail.innerHTML = '<td colspan="8"><div class="detail-inner">' +
-    banner + promptSection + tokenInfo +
-    '<div class="detail-section-lbl" style="margin-top:10px;margin-bottom:6px">Matched Rules</div>' +
-    '<div class="match-list">'+matchHTML+'</div>' +
-    '</div></td>';
+  var detail = document.createElement('tr');
+  detail.id = 'detail-'+id;
+  detail.className = 'detail-row';
+  var td = document.createElement('td');
+  td.colSpan = 9;
+  td.innerHTML =
+    '<div class="detail-wrap">' +
+      banner + promptSection + tokenInfo +
+      '<div class="detail-section-lbl" style="margin-top:14px;margin-bottom:6px">Matched Rules</div>' +
+      '<div class="match-list">'+matchHTML+'</div>' +
+    '</div>';
+  detail.appendChild(td);
   anchor.after(detail);
 }
 
@@ -1003,7 +1010,7 @@ async function refresh() {
     var wasOpen = openRow;
 
     document.getElementById('prompts-body').innerHTML = prompts.length === 0
-      ? '<tr class="empty"><td colspan="6">' +
+      ? '<tr class="empty"><td colspan="9">' +
           (currentFilter !== 'all'
             ? 'No ' + esc(currentFilter) + ' prompts in this time window.'
             : 'No prompts intercepted yet.<br><span style="font-size:12px;font-weight:400">Route your AI traffic through the proxy to start seeing requests here.</span>'
@@ -1054,10 +1061,10 @@ async function refresh() {
             '</tr>';
         }).join('');
 
-    if (wasOpen !== null && window._promptData[wasOpen]) {
-      openRow = null;
+    if (wasOpen && document.getElementById('row-'+wasOpen)) {
       toggleDetail(wasOpen);
     }
+
   } catch(e) {
     document.getElementById('meta').textContent = 'error: '+e.message;
   }

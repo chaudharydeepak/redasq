@@ -21,7 +21,8 @@ type Rule struct {
 	Pattern     *regexp.Regexp
 	Severity    Severity
 	Mode        Mode
-	Replacement string // used by RedactText; "$1[REDACTED]" preserves capture group 1
+	Replacement string           // used by RedactText; "$1[REDACTED]" preserves capture group 1
+	Validate    func(string) bool // optional: post-regex validation; nil means accept all matches
 }
 
 type Match struct {
@@ -30,6 +31,24 @@ type Match struct {
 	Severity string `json:"severity"`
 	Mode     string `json:"mode"`
 	Snippet  string `json:"snippet"`
+}
+
+// luhnCheck validates a string of digits using the Luhn algorithm.
+func luhnCheck(s string) bool {
+	sum := 0
+	nDigits := len(s)
+	parity := nDigits % 2
+	for i := 0; i < nDigits; i++ {
+		d := int(s[i] - '0')
+		if i%2 == parity {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+	}
+	return sum%10 == 0
 }
 
 var BuiltinRules = []Rule{
@@ -91,7 +110,7 @@ var BuiltinRules = []Rule{
 		ID:          "ssn",
 		Name:        "Social Security Number",
 		Description: "US Social Security Number (NNN-NN-NNNN)",
-		Pattern:     regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`),
+		Pattern:     regexp.MustCompile(`\b\d{3}-?\d{2}-?\d{4}\b`),
 		Severity:    SeverityHigh,
 		Mode:        ModeBlock,
 		Replacement: "[REDACTED]",
@@ -104,12 +123,13 @@ var BuiltinRules = []Rule{
 		Severity:    SeverityHigh,
 		Mode:        ModeBlock,
 		Replacement: "[REDACTED]",
+		Validate:    luhnCheck,
 	},
 	{
 		ID:          "http-basic-auth",
 		Name:        "HTTP Basic Auth Credential",
 		Description: "Authorization: Basic <base64> header value",
-		Pattern:     regexp.MustCompile(`(?i)\bBasic\s+[a-zA-Z0-9+/]{8,}={0,2}\b`),
+		Pattern:     regexp.MustCompile(`(?i)Authorization\s*:\s*Basic\s+[a-zA-Z0-9+/]{8,}={0,2}`),
 		Severity:    SeverityHigh,
 		Mode:        ModeBlock,
 		Replacement: "[REDACTED]",
@@ -138,10 +158,19 @@ var BuiltinRules = []Rule{
 		ID:          "generic-secret",
 		Name:        "Generic Secret / Password",
 		Description: "Password/secret keyword followed by a value (any separator)",
-		Pattern:     regexp.MustCompile(`(?i)(\b(?:access[\s_-]?key|secret[\s_-]?key|api[\s_-]?key|auth[\s_-]?token|bearer|password|passwd|secret)\b\s*(?:is|=|:|with|\s)\s*['"]?)([a-zA-Z0-9+/!\-_@#$%^&*]{4,}['"]?)`),
+		Pattern:     regexp.MustCompile(`(?i)(\b(?:access[\s_-]?key|secret[\s_-]?key|api[\s_-]?key|auth[\s_-]?token|bearer|password|passwd|secret)\b\s*(?:=|:)\s*['"]?)([a-zA-Z0-9+/!\-_@#$%^&*]{8,}['"]?)`),
 		Severity:    SeverityMedium,
 		Mode:        ModeTrack,
 		Replacement: "${1}[REDACTED]",
+	},
+	{
+		ID:          "db-connection-string",
+		Name:        "Database Connection String",
+		Description: "Database URI with embedded credentials (postgres, mysql, mongodb, redis)",
+		Pattern:     regexp.MustCompile(`(?i)(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:]+:[^@\s]{3,}@[^\s'"` + "`" + `]+`),
+		Severity:    SeverityHigh,
+		Mode:        ModeBlock,
+		Replacement: "[REDACTED]",
 	},
 	{
 		ID:          "email",

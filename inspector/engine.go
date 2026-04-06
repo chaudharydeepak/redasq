@@ -90,7 +90,18 @@ func (e *Engine) RedactText(text string) (string, []Match) {
 		if !e.agentMode && rule.Mode != ModeTrack {
 			continue
 		}
-		loc := rule.Pattern.FindStringIndex(result)
+		// Find first valid match (applying optional post-regex validator).
+		var loc []int
+		if rule.Validate != nil {
+			for _, l := range rule.Pattern.FindAllStringIndex(result, -1) {
+				if rule.Validate(result[l[0]:l[1]]) {
+					loc = l
+					break
+				}
+			}
+		} else {
+			loc = rule.Pattern.FindStringIndex(result)
+		}
 		if loc == nil {
 			continue
 		}
@@ -109,7 +120,16 @@ func (e *Engine) RedactText(text string) (string, []Match) {
 		if snipEnd < len(result) {
 			snippet = snippet + "…"
 		}
-		result = rule.Pattern.ReplaceAllString(result, rule.Replacement)
+		if rule.Validate != nil {
+			result = rule.Pattern.ReplaceAllStringFunc(result, func(m string) string {
+				if rule.Validate(m) {
+					return rule.Replacement
+				}
+				return m
+			})
+		} else {
+			result = rule.Pattern.ReplaceAllString(result, rule.Replacement)
+		}
 		matches = append(matches, Match{
 			RuleID:   rule.ID,
 			RuleName: rule.Name,
@@ -130,7 +150,16 @@ func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 	s := string(body)
 	for _, rule := range e.rules {
 		if e.agentMode || rule.Mode == ModeTrack {
-			s = rule.Pattern.ReplaceAllString(s, rule.Replacement)
+			if rule.Validate != nil {
+				s = rule.Pattern.ReplaceAllStringFunc(s, func(m string) string {
+					if rule.Validate(m) {
+						return rule.Replacement
+					}
+					return m
+				})
+			} else {
+				s = rule.Pattern.ReplaceAllString(s, rule.Replacement)
+			}
 		}
 	}
 	return []byte(s)
@@ -149,7 +178,17 @@ func (e *Engine) Inspect(text string) Result {
 		if rule.Mode != ModeBlock {
 			continue
 		}
-		locs := rule.Pattern.FindStringIndex(text)
+		var locs []int
+		if rule.Validate != nil {
+			for _, l := range rule.Pattern.FindAllStringIndex(text, -1) {
+				if rule.Validate(text[l[0]:l[1]]) {
+					locs = l
+					break
+				}
+			}
+		} else {
+			locs = rule.Pattern.FindStringIndex(text)
+		}
 		if locs == nil {
 			continue
 		}
