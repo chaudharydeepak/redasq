@@ -29,7 +29,7 @@ The risk is well-documented:
 - **Web dashboard** — live feed of all intercepted prompts with matched snippets, status, token usage, session ID, and client identity
 
 ![Prompt Guard Dashboard](dashboard.png)
-- **12 built-in rules** — credentials, PII, tokens, private keys
+- **14 built-in rules** — credentials, PII, tokens, private keys
 - **Live rule editing** — change rule modes in the dashboard; changes are written back to `rules.json` instantly
 - **Agent mode** — one-click toggle to switch all rules to redact so long-running agents are never hard-blocked; state persists across restarts; each request tagged in the dashboard
 - **SQLite persistence** — full audit log across restarts
