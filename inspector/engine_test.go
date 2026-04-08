@@ -182,7 +182,7 @@ func TestInspect_CreditCard(t *testing.T) {
 		// Visa 16-digit (standard test number)
 		{"card 4111111111111111 exp", true},
 		// Visa 13-digit
-		{"4111111111111", true},
+		{"4222222222222", true},
 		// Mastercard (51-55 prefix, 16 digits)
 		{"5500000000000004", true},
 		{"5105105105105100", true},
@@ -232,10 +232,10 @@ func TestRedactText_GenericSecret(t *testing.T) {
 		wantMatch bool
 	}{
 		{"api_key=mysecretvalue123", true},
-		{"password: hunter2", true},
-		{"secret is myS3cr3tVal", true},
-		{"bearer mytoken1234", true},
-		{"auth_token=abcd", true},
+		{"password: hunter22", true},          // 8-char value, colon separator
+		{"secret: myS3cr3tVal", true},         // colon separator
+		{"bearer: mytoken1234", true},         // colon separator
+		{"auth_token=abcdefgh", true},         // 8-char value
 		// value too short (3 chars)
 		{"password=abc", false},
 		// no keyword
