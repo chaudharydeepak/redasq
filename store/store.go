@@ -35,6 +35,7 @@ type Prompt struct {
 	OutputTokens   int
 	SessionID      string
 	Client         string
+	Model          string
 }
 
 type Store struct {
@@ -71,7 +72,8 @@ func (s *Store) migrate() error {
 			input_tokens     INTEGER NOT NULL DEFAULT 0,
 			output_tokens    INTEGER NOT NULL DEFAULT 0,
 			session_id       TEXT    NOT NULL DEFAULT '',
-			client           TEXT    NOT NULL DEFAULT ''
+			client           TEXT    NOT NULL DEFAULT '',
+			model            TEXT    NOT NULL DEFAULT ''
 		);
 		CREATE TABLE IF NOT EXISTS settings (
 			key   TEXT PRIMARY KEY,
@@ -91,6 +93,7 @@ func (s *Store) migrate() error {
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`)
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN client TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE prompts ADD COLUMN model TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -119,8 +122,8 @@ func (s *Store) SavePrompt(p Prompt) (int64, error) {
 		agentModeInt = 1
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO prompts (timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, session_id, client) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		p.Timestamp.Unix(), p.Host, p.Path, p.Prompt, string(p.Status), string(b), p.RedactedPrompt, p.DurationMS, agentModeInt, p.SessionID, p.Client,
+		`INSERT INTO prompts (timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, session_id, client, model) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		p.Timestamp.Unix(), p.Host, p.Path, p.Prompt, string(p.Status), string(b), p.RedactedPrompt, p.DurationMS, agentModeInt, p.SessionID, p.Client, p.Model,
 	)
 	if err != nil {
 		return 0, err
@@ -160,7 +163,7 @@ func (s *Store) CountPrompts(statusFilter, search string) (int, error) {
 }
 
 func (s *Store) ListPrompts(statusFilter, search string, limit, offset int) ([]Prompt, error) {
-	const sel = `SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client FROM prompts`
+	const sel = `SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client, model FROM prompts`
 	like := "%" + search + "%"
 	var (
 		rows *sql.Rows
@@ -193,7 +196,7 @@ func (s *Store) GetPrompt(id int64) (*Prompt, error) {
 	var ts int64
 	var matchJSON string
 	var agentModeInt int
-	if err := row.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt, &p.InputTokens, &p.OutputTokens, &p.SessionID, &p.Client); err != nil {
+	if err := row.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt, &p.InputTokens, &p.OutputTokens, &p.SessionID, &p.Client, &p.Model); err != nil {
 		return nil, err
 	}
 	p.Timestamp = time.Unix(ts, 0)
@@ -209,7 +212,7 @@ func scanPrompts(rows *sql.Rows) ([]Prompt, error) {
 		var ts int64
 		var matchJSON string
 		var agentModeInt int
-		if err := rows.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt, &p.InputTokens, &p.OutputTokens, &p.SessionID, &p.Client); err != nil {
+		if err := rows.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt, &p.InputTokens, &p.OutputTokens, &p.SessionID, &p.Client, &p.Model); err != nil {
 			return nil, err
 		}
 		p.Timestamp = time.Unix(ts, 0)
@@ -248,12 +251,78 @@ func (s *Store) Stats() Stats {
 	return st
 }
 
+// ModelStat holds latency percentiles for a single model.
+type ModelStat struct {
+	Model  string  `json:"model"`
+	P50MS  int64   `json:"p50_ms"`
+	P95MS  int64   `json:"p95_ms"`
+	Sample int     `json:"sample"`
+}
+
+// ModelStats returns p50/p95 TTFB per model from the last 50 completed requests each.
+func (s *Store) ModelStats() ([]ModelStat, error) {
+	rows, err := s.db.Query(`
+		SELECT model, duration_ms
+		FROM (
+			SELECT model, duration_ms,
+			       ROW_NUMBER() OVER (PARTITION BY model ORDER BY timestamp DESC) AS rn
+			FROM prompts
+			WHERE model != '' AND duration_ms > 0
+		)
+		WHERE rn <= 50
+		ORDER BY model, duration_ms
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Group durations by model (already sorted ascending per model within the window).
+	type group struct {
+		durations []int64
+	}
+	groups := map[string]*group{}
+	var order []string
+	for rows.Next() {
+		var model string
+		var ms int64
+		if err := rows.Scan(&model, &ms); err != nil {
+			return nil, err
+		}
+		if _, ok := groups[model]; !ok {
+			groups[model] = &group{}
+			order = append(order, model)
+		}
+		groups[model].durations = append(groups[model].durations, ms)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]ModelStat, 0, len(order))
+	for _, model := range order {
+		d := groups[model].durations
+		n := len(d)
+		p50 := d[int(float64(n)*0.50)]
+		p95 := d[min(int(float64(n)*0.95), n-1)]
+		out = append(out, ModelStat{Model: model, P50MS: p50, P95MS: p95, Sample: n})
+	}
+	return out, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // ExportPrompts returns prompts in chronological order within the given time range.
 // Pass zero values to export all. Secrets are never exported — redacted text is used.
 func (s *Store) ExportPrompts(from, to time.Time) ([]Prompt, error) {
 	var rows *sql.Rows
 	var err error
-	const sel = `SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client FROM prompts`
+	const sel = `SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client, model FROM prompts`
 	switch {
 	case !from.IsZero() && !to.IsZero():
 		rows, err = s.db.Query(sel+` WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC`, from.Unix(), to.Unix())

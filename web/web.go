@@ -13,9 +13,24 @@ import (
 	"github.com/chaudharydeepak/prompt-guard/store"
 )
 
+// NewHandler builds and returns the dashboard HTTP handler without starting a server.
+// Used directly in tests via httptest.NewServer.
+func NewHandler(db *store.Store, eng *inspector.Engine, configPath string) http.Handler {
+	mux := http.NewServeMux()
+	registerRoutes(mux, db, eng, configPath)
+	return mux
+}
+
 // Start runs the web dashboard on the given port. Non-blocking.
 func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) {
 	mux := http.NewServeMux()
+	registerRoutes(mux, db, eng, configPath)
+	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
+	log.Printf("dashboard: http://localhost:%d", port)
+	go func() { log.Fatal(srv.ListenAndServe()) }()
+}
+
+func registerRoutes(mux *http.ServeMux, db *store.Store, eng *inspector.Engine, configPath string) {
 	mux.HandleFunc("/api/prompts", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			if err := db.DeleteAllPrompts(); err != nil {
@@ -38,6 +53,14 @@ func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) 
 	})
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		apiStats(w, r, db)
+	})
+	mux.HandleFunc("/api/model-stats", func(w http.ResponseWriter, r *http.Request) {
+		stats, err := db.ModelStats()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, stats)
 	})
 	mux.HandleFunc("/api/agent-mode", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -76,10 +99,6 @@ func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, dashboardHTML)
 	})
-
-	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
-	log.Printf("dashboard: http://localhost:%d", port)
-	go func() { log.Fatal(srv.ListenAndServe()) }()
 }
 
 // ── API handlers ─────────────────────────────────────────────────────────────
@@ -125,6 +144,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 		OutputTokens   int               `json:"output_tokens"`
 		SessionID      string            `json:"session_id"`
 		Client         string            `json:"client"`
+		Model          string            `json:"model"`
 	}
 	out := make([]row, 0, len(prompts))
 	for _, p := range prompts {
@@ -157,6 +177,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 			OutputTokens:   p.OutputTokens,
 			SessionID:      p.SessionID,
 			Client:         p.Client,
+			Model:          p.Model,
 		})
 	}
 	type response struct {
@@ -476,8 +497,35 @@ var dashboardHTML = `<!DOCTYPE html>
 
   /* ── Layout ────────────────────────────────────── */
   .pg-main { padding: 18px 24px; max-width: 100%; margin: 0 auto; }
-  .pg-cols { display: grid; grid-template-columns: 1fr 300px; gap: 16px; align-items: start; }
+  .pg-cols { display: grid; grid-template-columns: 1fr 300px; gap: 16px; align-items: start; transition: grid-template-columns .2s ease; }
+  body.rules-collapsed .pg-cols { grid-template-columns: 1fr 28px; }
   @media(max-width:880px) { .pg-cols { grid-template-columns: 1fr; } }
+
+  /* ── Rules panel collapse ───────────────────────── */
+  .rules-panel-wrap { position: sticky; top: 52px; }
+  .rules-toggle-btn {
+    background: none; border: none; cursor: pointer;
+    font-size: 14px; color: var(--text-3); padding: 0 4px; line-height: 1;
+    margin-left: auto;
+  }
+  .rules-toggle-btn:hover { color: var(--text-1); }
+  .rules-panel-inner { overflow: hidden; transition: opacity .15s; }
+  body.rules-collapsed .rules-panel-inner { opacity: 0; pointer-events: none; display: none; }
+  /* Collapsed strip: arrow at top, vertical label below — no overlap */
+  .rules-collapsed-strip {
+    display: none; flex-direction: column; align-items: center;
+    cursor: pointer; padding-top: 8px; gap: 8px;
+  }
+  .rules-collapsed-strip:hover .rules-collapsed-arrow { color: var(--text-1); }
+  .rules-collapsed-arrow {
+    font-size: 14px; color: var(--text-3); line-height: 1;
+  }
+  .rules-collapsed-label {
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    font-size: 10.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+    color: var(--text-3); white-space: nowrap;
+  }
+  body.rules-collapsed .rules-collapsed-strip { display: flex; }
 
   /* ── Metric tiles ──────────────────────────────── */
   /* 7-column grid; last 2 (telemetry, top-host) are utility/metadata and narrower visually */
@@ -488,6 +536,8 @@ var dashboardHTML = `<!DOCTYPE html>
   .tile { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px;
           padding: 14px 16px 13px; position: relative; overflow: hidden;
           transition: border-color .2s; }
+  /* Model latency cards — accent bar colour */
+  .tile-model::before { background: linear-gradient(90deg,#06b6d4 0%,transparent 85%); }
   /* Top accent bar — 3px for the five primary metrics */
   .tile::before { content:''; position:absolute; top:0;left:0;right:0; height:3px; border-radius:10px 10px 0 0; }
   .tile-total::before   { background: linear-gradient(90deg,var(--accent) 0%,transparent 85%); }
@@ -571,6 +621,7 @@ var dashboardHTML = `<!DOCTYPE html>
   .pg-tbl th:nth-child(8) { width: 44px; text-align:center; }  /* CTX */
   .pg-tbl th:nth-child(9) { width: 85px; }   /* Session */
   .pg-tbl th:nth-child(10){ width: 160px; }  /* Client */
+  .pg-tbl th:nth-child(11){ width: 140px; }  /* Model */
   /* Column headers: tighter letter-spacing, standard Datadog table header style */
   .pg-tbl th { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
                color: var(--text-3); padding: 8px 16px; border-bottom: 1px solid var(--border);
@@ -804,6 +855,12 @@ var dashboardHTML = `<!DOCTYPE html>
       <div class="tile-sub">total input tokens</div>
     </div>
   </div>
+
+  <!-- Model latency row -->
+  <div id="model-latency-row" style="display:none;margin-top:-8px;margin-bottom:18px">
+    <div id="model-latency-cards" class="tiles" style="margin-bottom:0"></div>
+  </div>
+
   <div class="pg-cols">
     <!-- Prompts table -->
     <div>
@@ -837,10 +894,11 @@ var dashboardHTML = `<!DOCTYPE html>
                 <th style="text-align:center">CTX</th>
                 <th>Session</th>
                 <th>Client</th>
+                <th>Model</th>
               </tr>
             </thead>
             <tbody id="prompts-body">
-              <tr class="empty"><td colspan="10">No prompts intercepted yet</td></tr>
+              <tr class="empty"><td colspan="11">No prompts intercepted yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -858,13 +916,20 @@ var dashboardHTML = `<!DOCTYPE html>
     </div>
 
     <!-- Rules panel -->
-    <div style="position:sticky;top:52px">
-      <div class="panel">
-        <div class="panel-hd">
-          <span class="panel-title">Detection Rules</span>
-          <span class="panel-count" id="rules-count">0</span>
+    <div class="rules-panel-wrap">
+      <div class="rules-panel-inner">
+        <div class="panel">
+          <div class="panel-hd" style="display:flex;align-items:center">
+            <span class="panel-title">Detection Rules</span>
+            <span class="panel-count" id="rules-count">0</span>
+            <button class="rules-toggle-btn" onclick="toggleRulesPanel()" title="Collapse rules panel">›</button>
+          </div>
+          <div id="rules-list" style="max-height:calc(100vh - 130px);overflow-y:auto"></div>
         </div>
-        <div id="rules-list" style="max-height:calc(100vh - 130px);overflow-y:auto"></div>
+      </div>
+      <div class="rules-collapsed-strip" onclick="toggleRulesPanel()" title="Expand rules panel">
+        <span class="rules-collapsed-arrow">‹</span>
+        <span class="rules-collapsed-label">Detection Rules</span>
       </div>
     </div>
   </div>
@@ -1014,7 +1079,7 @@ function toggleDetail(id) {
   detail.id = 'detail-'+id;
   detail.className = 'detail-row';
   var td = document.createElement('td');
-  td.colSpan = 10;
+  td.colSpan = 11;
   td.innerHTML =
     '<div class="detail-wrap">' +
       banner + promptSection + tokenInfo +
@@ -1026,8 +1091,11 @@ function toggleDetail(id) {
 }
 
 var lastTopId = null;
+var _refreshTick = 0;
 
 async function refresh() {
+  _refreshTick++;
+  if (_refreshTick % 3 === 1) refreshModelStats(); // every ~9s, in sync with main timer
   try {
     var qs = '?page='+currentPage+'&per_page='+pageSize+(currentFilter !== 'all' ? '&status='+currentFilter : '')+(currentSearch ? '&search='+encodeURIComponent(currentSearch) : '');
     var [pr, sr] = await Promise.all([fetch('/api/prompts'+qs), fetch('/api/stats')]);
@@ -1072,7 +1140,7 @@ async function refresh() {
     var wasOpen = openRow;
 
     document.getElementById('prompts-body').innerHTML = prompts.length === 0
-      ? '<tr class="empty"><td colspan="10">' +
+      ? '<tr class="empty"><td colspan="11">' +
           (currentFilter !== 'all'
             ? 'No ' + esc(currentFilter) + ' prompts in this time window.'
             : 'No prompts intercepted yet.<br><span style="font-size:12px;font-weight:400">Route your AI traffic through the proxy to start seeing requests here.</span>'
@@ -1110,6 +1178,10 @@ async function refresh() {
           var clientCell = clientVal
             ? '<td class="mono muted" title="'+esc(clientVal)+'">'+esc(clientVal)+'</td>'
             : '<td class="mono muted" style="color:var(--text-3)">—</td>';
+          var modelVal = p.model || '';
+          var modelCell = modelVal
+            ? '<td class="mono muted" title="'+esc(modelVal)+'">'+esc(modelVal)+'</td>'
+            : '<td class="mono muted" style="color:var(--text-3)">—</td>';
           return '<tr id="row-'+p.id+'" class="row-'+p.status+'" onclick="toggleDetail('+p.id+')">' +
             '<td class="mono muted">'+esc(p.time)+'</td>' +
             '<td>'+statusTag(p.status)+agentBadge+'</td>' +
@@ -1128,6 +1200,7 @@ async function refresh() {
             })()+
             sessionCell +
             clientCell +
+            modelCell +
             '</tr>';
         }).join('');
 
@@ -1201,10 +1274,48 @@ async function clearAllPrompts() {
   await refresh();
 }
 
+function toggleRulesPanel() {
+  document.body.classList.toggle('rules-collapsed');
+  try { localStorage.setItem('rules-collapsed', document.body.classList.contains('rules-collapsed')); } catch(e) {}
+}
+// Restore collapsed state across page reloads.
+try { if (localStorage.getItem('rules-collapsed') === 'true') document.body.classList.add('rules-collapsed'); } catch(e) {}
+
 refresh();
+refreshModelStats();
 loadRules();
 fetch('/api/agent-mode').then(function(r){ return r.json(); }).then(function(d){ updateAgentModeUI(d.agent_mode); });
 fetch('/api/context-limits').then(function(r){ return r.json(); }).then(function(d){ _ctxLimits = d; });
+
+async function refreshModelStats() {
+  try {
+    var stats = await fetch('/api/model-stats').then(function(r){ return r.json(); });
+    var row = document.getElementById('model-latency-row');
+    var cards = document.getElementById('model-latency-cards');
+    if (!stats || stats.length === 0) { row.style.display = 'none'; return; }
+    row.style.display = 'block';
+    cards.innerHTML = stats.map(function(s) {
+      var p50 = s.p50_ms >= 1000 ? (s.p50_ms/1000).toFixed(1)+'s' : s.p50_ms+'ms';
+      var p95 = s.p95_ms >= 1000 ? (s.p95_ms/1000).toFixed(1)+'s' : s.p95_ms+'ms';
+      var p95Color = s.p95_ms > 10000 ? 'var(--danger)' : s.p95_ms > 5000 ? 'var(--warning)' : 'var(--text-1)';
+      return '<div class="tile tile-model" style="padding:11px 14px 10px">' +
+        '<div class="tile-lbl" title="'+esc(s.model)+'" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(s.model)+'</div>' +
+        '<div style="display:flex;gap:14px;margin-top:5px">' +
+          '<div>' +
+            '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3)">p50</div>' +
+            '<div style="font-size:20px;font-weight:700;letter-spacing:-.4px;color:var(--text-1);line-height:1.1">'+p50+'</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3)">p95</div>' +
+            '<div style="font-size:20px;font-weight:700;letter-spacing:-.4px;line-height:1.1;color:'+p95Color+'">'+p95+'</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="tile-sub">'+s.sample+' req · last 50</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) {}
+}
+
 setInterval(refresh, 3000);
 
 function toggleExport() {

@@ -309,6 +309,15 @@ func ExtractUsage(body []byte) (inputTokens, outputTokens int) {
 }
 
 
+// ExtractModel returns the model name from an OpenAI or Anthropic request body.
+func ExtractModel(body []byte) string {
+	var req struct {
+		Model string `json:"model"`
+	}
+	json.Unmarshal(body, &req)
+	return req.Model
+}
+
 // ExtractAnthropicSessionID pulls the session_id from the metadata.user_id field
 // that Claude Code embeds in every /v1/messages request body.
 // The user_id field is a JSON-encoded string: {"device_id":"...","session_id":"..."}

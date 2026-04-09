@@ -160,6 +160,7 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		// Copilot CLI: X-Client-Session-Id header; Copilot-Integration-Id names the client.
 		// Claude Code: metadata.user_id JSON field; User-Agent names the client.
 		// All others: first token of User-Agent as best-effort client name.
+		model := ExtractModel(body)
 		var sessionID, client string
 		if sid := req.Header.Get("Vscode-Sessionid"); sid != "" {
 			sessionID = sid
@@ -235,7 +236,7 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		// inspect and redact them; we just don't terminate the connection.
 		allowBlock := !isCopilotBackground(body)
 
-		blocked, msg, savedID := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock, sessionID, client)
+		blocked, msg, savedID := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock, sessionID, client, model)
 		if blocked {
 			if strings.Contains(stripPort(hostport), "claude.ai") {
 				writeHTTPError(tlsClient, 400, msg)
@@ -464,7 +465,7 @@ func isCopilotBackground(body []byte) bool {
 // redactions are track-mode matches already applied to the forwarded body.
 // allowBlock: if false, block-mode rules are recorded but the request is not terminated.
 // Returns (blocked, assistantMessage, savedRowID). savedRowID is 0 if nothing was stored.
-func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombined, displayPrompt string, redactions []inspector.Match, allowBlock bool, sessionID, client string) (bool, string, int64) {
+func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombined, displayPrompt string, redactions []inspector.Match, allowBlock bool, sessionID, client, model string) (bool, string, int64) {
 	if combined == "" && len(redactions) == 0 {
 		return false, "", 0
 	}
@@ -503,6 +504,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 		AgentMode:      p.eng.AgentMode(),
 		SessionID:      sessionID,
 		Client:         client,
+		Model:          model,
 	})
 	if err != nil {
 		log.Printf("store ERROR: %v", err)
