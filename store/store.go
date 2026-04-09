@@ -243,6 +243,7 @@ func (s *Store) Stats() Stats {
 	s.db.QueryRow(
 		`SELECT host FROM prompts WHERE status!='clean' AND status!='telemetry' GROUP BY host ORDER BY COUNT(*) DESC LIMIT 1`,
 	).Scan(&st.MostFlaggedHost)
+	s.db.QueryRow(`SELECT COALESCE(SUM(input_tokens),0) FROM prompts`).Scan(&st.TotalInputTokens)
 	s.db.QueryRow(`SELECT COALESCE(SUM(output_tokens),0) FROM prompts`).Scan(&st.TotalOutputTokens)
 	return st
 }

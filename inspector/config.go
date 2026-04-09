@@ -27,8 +27,11 @@ type Override struct {
 
 // Config is the top-level structure of rules.json.
 type Config struct {
-	Overrides []Override   `json:"overrides"`
-	Rules     []RuleConfig `json:"rules"`
+	Overrides     []Override     `json:"overrides"`
+	Rules         []RuleConfig   `json:"rules"`
+	// ContextLimits maps a client prefix (e.g. "claude-cli", "copilot") to its
+	// maximum context window in tokens. "default" is used as the fallback.
+	ContextLimits map[string]int `json:"context_limits,omitempty"`
 }
 
 // LoadConfig reads rules.json from path. Returns an empty config if the file

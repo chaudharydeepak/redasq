@@ -52,6 +52,18 @@ func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) 
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"agent_mode":%v}`, eng.AgentMode())
 	})
+	mux.HandleFunc("/api/context-limits", func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := inspector.LoadConfig(configPath)
+		limits := map[string]int{"default": 200000}
+		if err == nil && len(cfg.ContextLimits) > 0 {
+			limits = cfg.ContextLimits
+			if _, ok := limits["default"]; !ok {
+				limits["default"] = 200000
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(limits)
+	})
 	mux.HandleFunc("/api/export", func(w http.ResponseWriter, r *http.Request) {
 		apiExport(w, r, db)
 	})
@@ -556,8 +568,9 @@ var dashboardHTML = `<!DOCTYPE html>
   .pg-tbl th:nth-child(5) { width: 140px; }  /* Rules Hit */
   .pg-tbl th:nth-child(6) { width: 65px; }   /* Latency */
   .pg-tbl th:nth-child(7) { width: 120px; }  /* Tokens in/out */
-  .pg-tbl th:nth-child(8) { width: 85px; }   /* Session */
-  .pg-tbl th:nth-child(9) { width: 160px; }  /* Client */
+  .pg-tbl th:nth-child(8) { width: 44px; text-align:center; }  /* CTX */
+  .pg-tbl th:nth-child(9) { width: 85px; }   /* Session */
+  .pg-tbl th:nth-child(10){ width: 160px; }  /* Client */
   /* Column headers: tighter letter-spacing, standard Datadog table header style */
   .pg-tbl th { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
                color: var(--text-3); padding: 8px 16px; border-bottom: 1px solid var(--border);
@@ -595,6 +608,7 @@ var dashboardHTML = `<!DOCTYPE html>
   .pg-tbl tr.row-flagged  td { background: var(--flagged-bg); }
   .pg-tbl tr.row-redacted td { background: var(--redacted-bg); }
 
+  /* ── Detail row ────────────────────────────────── */
   /* ── Detail row ────────────────────────────────── */
   /* Left-inset border connects visually to the expanded row above */
   .detail-row td { background: var(--bg-input) !important; padding: 0 !important;
@@ -785,9 +799,9 @@ var dashboardHTML = `<!DOCTYPE html>
       <div class="tile-sub">most flagged</div>
     </div>
     <div class="tile tile-tokens">
-      <div class="tile-lbl">Tokens</div>
+      <div class="tile-lbl">Context In</div>
       <div class="tile-val" id="tile-tokens">—</div>
-      <div class="tile-sub">output generated</div>
+      <div class="tile-sub">total input tokens</div>
     </div>
   </div>
   <div class="pg-cols">
@@ -820,12 +834,13 @@ var dashboardHTML = `<!DOCTYPE html>
                 <th>Rules Hit</th>
                 <th>Latency</th>
                 <th>Tokens (in/out)</th>
+                <th style="text-align:center">CTX</th>
                 <th>Session</th>
                 <th>Client</th>
- </tr>
+              </tr>
             </thead>
             <tbody id="prompts-body">
-              <tr class="empty"><td colspan="9">No prompts intercepted yet</td></tr>
+              <tr class="empty"><td colspan="10">No prompts intercepted yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -862,6 +877,20 @@ var currentSearch = '';
 var currentPage   = 1;
 var pageSize      = 25;
 var _searchTimer  = null;
+var _ctxLimits    = { default: 200000 }; // populated from /api/context-limits
+
+// Returns the context limit for a given client string by prefix-matching the
+// configured keys. Falls back to "default".
+function ctxLimitFor(client) {
+  if (!client) return _ctxLimits.default || 200000;
+  var keys = Object.keys(_ctxLimits).filter(function(k){ return k !== 'default'; });
+  for (var i = 0; i < keys.length; i++) {
+    if (client.toLowerCase().indexOf(keys[i].toLowerCase()) !== -1) {
+      return _ctxLimits[keys[i]];
+    }
+  }
+  return _ctxLimits.default || 200000;
+}
 
 function onSearchInput(val) {
   clearTimeout(_searchTimer);
@@ -985,7 +1014,7 @@ function toggleDetail(id) {
   detail.id = 'detail-'+id;
   detail.className = 'detail-row';
   var td = document.createElement('td');
-  td.colSpan = 9;
+  td.colSpan = 10;
   td.innerHTML =
     '<div class="detail-wrap">' +
       banner + promptSection + tokenInfo +
@@ -1018,8 +1047,8 @@ async function refresh() {
     document.getElementById('tile-blocked').textContent    = stats.blocked   || 0;
     document.getElementById('tile-telemetry').textContent = stats.telemetry || 0;
     document.getElementById('tile-host').textContent      = stats.most_flagged_host || '—';
-    var outTok = stats.total_output_tokens||0;
-    document.getElementById('tile-tokens').textContent = outTok > 0 ? fmtTokens(outTok) : '—';
+    var inTok = stats.total_input_tokens||0;
+    document.getElementById('tile-tokens').textContent = inTok > 0 ? fmtTokens(inTok) : '—';
     document.getElementById('prompt-count').textContent  = total;
     // Alert state: glow the blocked tile when there are active blocks; same for flagged
     var blockedTile = document.querySelector('.tile-blocked');
@@ -1043,7 +1072,7 @@ async function refresh() {
     var wasOpen = openRow;
 
     document.getElementById('prompts-body').innerHTML = prompts.length === 0
-      ? '<tr class="empty"><td colspan="9">' +
+      ? '<tr class="empty"><td colspan="10">' +
           (currentFilter !== 'all'
             ? 'No ' + esc(currentFilter) + ' prompts in this time window.'
             : 'No prompts intercepted yet.<br><span style="font-size:12px;font-weight:400">Route your AI traffic through the proxy to start seeing requests here.</span>'
@@ -1072,7 +1101,7 @@ async function refresh() {
                 ? (p.duration_ms/1000).toFixed(1)+'s'
                 : p.duration_ms+'ms')
             : '<span style="color:var(--text-3)">—</span>';
-          var agentBadge = p.agent_mode ? '<span style="margin-left:4px;font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#f59e0b;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:1px 5px;">ag</span>' : '';
+          var agentBadge = p.agent_mode ? '<span style="display:block;margin-top:3px;font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#f59e0b;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:1px 5px;width:fit-content;">ag</span>' : '';
           var sid = p.session_id || '';
           var sessionCell = sid
             ? '<td class="mono muted td-r" title="'+esc(sid)+'">'+esc(sid.slice(0,8))+'</td>'
@@ -1089,6 +1118,14 @@ async function refresh() {
             '<td>'+rulesHTML+'</td>' +
             '<td class="mono muted td-r">'+dur+'</td>' +
             '<td class="mono muted td-r">'+(p.input_tokens||p.output_tokens ? fmtTokens(p.input_tokens||0)+' / '+fmtTokens(p.output_tokens||0) : '—')+'</td>' +
+            (function(){
+              if (!p.input_tokens) return '<td style="text-align:center"><span style="color:var(--text-3);font-size:11px">—</span></td>';
+              var lim = ctxLimitFor(p.client);
+              var pct = Math.min(Math.round(p.input_tokens / lim * 100), 100);
+              var col = pct >= 90 ? '#ef4444' : pct >= 75 ? '#f59e0b' : '#22c55e';
+              var tip = pct+'% of '+fmtTokens(lim)+' ctx limit'+(pct>=90?' — start new session':pct>=75?' — approaching limit':'');
+              return '<td style="text-align:center"><span title="'+tip+'" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+col+'"></span></td>';
+            })()+
             sessionCell +
             clientCell +
             '</tr>';
@@ -1167,6 +1204,7 @@ async function clearAllPrompts() {
 refresh();
 loadRules();
 fetch('/api/agent-mode').then(function(r){ return r.json(); }).then(function(d){ updateAgentModeUI(d.agent_mode); });
+fetch('/api/context-limits').then(function(r){ return r.json(); }).then(function(d){ _ctxLimits = d; });
 setInterval(refresh, 3000);
 
 function toggleExport() {

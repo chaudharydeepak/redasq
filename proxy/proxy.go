@@ -479,7 +479,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 	if storedPrompt == "" {
 		storedPrompt = combined
 	}
-	// Always redact before storing — sensitive values must never land in the DB.
+	// Redact a copy for the RedactedPrompt field so the UI can show before/after.
 	redactedDisplay, _ := p.eng.RedactText(storedPrompt)
 
 	debugf("STORE: status=%s host=%s rules=%d", status, stripPort(host), len(allMatches))
@@ -487,7 +487,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 		Timestamp:      time.Now(),
 		Host:           stripPort(host),
 		Path:           req.URL.Path,
-		Prompt:         redactedDisplay,
+		Prompt:         storedPrompt,
 		RedactedPrompt: redactedDisplay,
 		Status:         status,
 		Matches:        allMatches,

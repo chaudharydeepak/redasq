@@ -158,10 +158,10 @@ var BuiltinRules = []Rule{
 		ID:          "generic-secret",
 		Name:        "Generic Secret / Password",
 		Description: "Password/secret keyword followed by a value (any separator)",
-		Pattern:     regexp.MustCompile(`(?i)(\b(?:access[\s_-]?key|secret[\s_-]?key|api[\s_-]?key|auth[\s_-]?token|bearer|password|passwd|secret)\b\s*(?:=|:)\s*['"]?)([a-zA-Z0-9+/!\-_@#$%^&*]{8,}['"]?)`),
+		Pattern:     regexp.MustCompile(`(?i)(\b(?:access[\s_-]?key|secret[\s_-]?key|api[\s_-]?key|auth[\s_-]?token|bearer|password|passwd|secret)\b\s*(?:=|:)\s*['"]?)([a-zA-Z0-9+/!\-_@#$%^&*]{8,})(['"]?)`),
 		Severity:    SeverityMedium,
 		Mode:        ModeTrack,
-		Replacement: "${1}[REDACTED]",
+		Replacement: "${1}[REDACTED]${3}",
 	},
 	{
 		ID:          "db-connection-string",
