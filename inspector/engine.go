@@ -1,6 +1,10 @@
 package inspector
 
-import "sync"
+import (
+	"bytes"
+	"encoding/json"
+	"sync"
+)
 
 // Result is the outcome of inspecting a prompt.
 type Result struct {
@@ -142,11 +146,27 @@ func (e *Engine) RedactText(text string) (string, []Match) {
 }
 
 // RedactBodyForForwarding applies track-mode replacements to the raw request body.
+// For JSON bodies it operates on parsed string values only, so the JSON structure
+// is never corrupted. Falls back to plain string replacement for non-JSON bodies.
 // In agent mode all rules are applied regardless of their configured mode.
 func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	if json.Valid(body) {
+		var v interface{}
+		if err := json.Unmarshal(body, &v); err == nil {
+			v = e.redactJSONValue(v)
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(false)
+			if err := enc.Encode(v); err == nil {
+				return bytes.TrimRight(buf.Bytes(), "\n")
+			}
+		}
+	}
+
+	// Non-JSON fallback (plain text, YAML, etc.)
 	s := string(body)
 	for _, rule := range e.rules {
 		if e.agentMode || rule.Mode == ModeTrack {
@@ -163,6 +183,42 @@ func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 		}
 	}
 	return []byte(s)
+}
+
+// redactJSONValue recursively walks a decoded JSON value and applies redaction
+// rules to every string leaf. map and slice values are mutated in place.
+func (e *Engine) redactJSONValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case string:
+		for _, rule := range e.rules {
+			if !e.agentMode && rule.Mode != ModeTrack {
+				continue
+			}
+			if rule.Validate != nil {
+				val = rule.Pattern.ReplaceAllStringFunc(val, func(m string) string {
+					if rule.Validate(m) {
+						return rule.Replacement
+					}
+					return m
+				})
+			} else {
+				val = rule.Pattern.ReplaceAllString(val, rule.Replacement)
+			}
+		}
+		return val
+	case map[string]interface{}:
+		for k, v2 := range val {
+			val[k] = e.redactJSONValue(v2)
+		}
+		return val
+	case []interface{}:
+		for i, v2 := range val {
+			val[i] = e.redactJSONValue(v2)
+		}
+		return val
+	default:
+		return v
+	}
 }
 
 func (e *Engine) Inspect(text string) Result {

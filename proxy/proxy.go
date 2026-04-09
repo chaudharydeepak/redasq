@@ -215,7 +215,16 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		redactedCombined, redactions := p.eng.RedactText(combined)
 		redactedBody := body
 		if len(redactions) > 0 {
-			redactedBody = p.eng.RedactBodyForForwarding(body)
+			candidate := p.eng.RedactBodyForForwarding(body)
+			// Safety net: if the body was valid JSON but redaction produced invalid
+			// JSON, fall back to the original to avoid a bad-request loop. The
+			// dashboard still shows the redacted version; only the forwarded bytes
+			// are preserved as-is.
+			if json.Valid(body) && !json.Valid(candidate) {
+				log.Printf("warn: redaction produced invalid JSON body — forwarding original")
+				candidate = body
+			}
+			redactedBody = candidate
 			req.Body = io.NopCloser(bytes.NewReader(redactedBody))
 			req.ContentLength = int64(len(redactedBody))
 		}
