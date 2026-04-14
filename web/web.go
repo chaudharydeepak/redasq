@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -258,6 +259,14 @@ func apiRules(w http.ResponseWriter, _ *http.Request, eng *inspector.Engine) {
 	for i, r := range rules {
 		out[i] = ruleOut{r.ID, r.Name, r.Description, string(r.Severity), string(r.Mode)}
 	}
+	// Sort: high → medium → low, then alphabetically by name within each group.
+	sevOrder := map[string]int{"high": 0, "medium": 1, "low": 2}
+	slices.SortFunc(out, func(a, b ruleOut) int {
+		if sa, sb := sevOrder[a.Severity], sevOrder[b.Severity]; sa != sb {
+			return sa - sb
+		}
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
 	jsonResponse(w, out)
 }
 
@@ -497,7 +506,7 @@ var dashboardHTML = `<!DOCTYPE html>
 
   /* ── Layout ────────────────────────────────────── */
   .pg-main { padding: 18px 24px; max-width: 100%; margin: 0 auto; }
-  .pg-cols { display: grid; grid-template-columns: 1fr 300px; gap: 16px; align-items: start; transition: grid-template-columns .2s ease; }
+  .pg-cols { display: grid; grid-template-columns: 1fr 360px; gap: 16px; align-items: start; transition: grid-template-columns .2s ease; }
   body.rules-collapsed .pg-cols { grid-template-columns: 1fr 28px; }
   @media(max-width:880px) { .pg-cols { grid-template-columns: 1fr; } }
 
@@ -717,7 +726,17 @@ var dashboardHTML = `<!DOCTYPE html>
   /* Card layout reworked: severity+control on one row, name+desc below.
      This puts the actionable control (Track/Block) beside the severity signal,
      so operator can scan severity → decide mode without vertical jumping. */
-  .rule-card { padding: 11px 14px 11px 15px; border-bottom: 1px solid var(--border-sub);
+  .rules-search-wrap { padding: 8px 10px 6px; border-bottom: 1px solid var(--border-sub); }
+  .rules-search-input { width: 100%; box-sizing: border-box; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px;
+    font-size: 12px; color: var(--text-1); font-family: inherit; outline: none; }
+  .rules-search-input::placeholder { color: var(--text-3); }
+  .rules-search-input:focus { border-color: var(--accent); }
+  .rules-group-hd { padding: 5px 14px 4px; font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); background: var(--bg-raised); border-bottom: 1px solid var(--border-sub); position: sticky; top: 0; z-index: 1; }
+  .rules-group-hd.sev-hd-high   { color: var(--danger); }
+  .rules-group-hd.sev-hd-medium { color: var(--warning); }
+  .rules-group-hd.sev-hd-low    { color: var(--accent); }
+  .rule-card { padding: 9px 12px 9px 13px; border-bottom: 1px solid var(--border-sub);
                display: flex; flex-direction: column; gap: 6px;
                border-left: 3px solid transparent; transition: background .15s; }
   .rule-card:last-child { border-bottom: none; }
@@ -728,19 +747,21 @@ var dashboardHTML = `<!DOCTYPE html>
   /* Row 1: rule name (left) + segmented control (right) — primary action always visible */
   .rule-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .rule-info { min-width: 0; flex: 1; }
-  .rule-name { font-weight: 600; font-size: 12.5px; line-height: 1.3;
-               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Row 2: description — subordinate, no need to visually compete */
-  .rule-desc { color: var(--text-3); font-size: 11px; line-height: 1.45; }
-  /* Row 3: severity tag — bottom, provides context after you have read name+desc */
+  .rule-name { font-weight: 600; font-size: 12px; line-height: 1.35;
+               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+               overflow: hidden; }
+  /* Row 2: description — capped at 2 lines, subordinate */
+  .rule-desc { color: var(--text-3); font-size: 11px; line-height: 1.4;
+               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+               overflow: hidden; }
   .rule-foot { display: flex; align-items: center; gap: 6px; }
 
   /* Segmented control — Track / Block
      Increased padding for easier tap/click targets, rounded outer corners */
-  .seg { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden;
          flex-shrink: 0; background: var(--bg-raised); }
-  .seg-btn { border: none; background: transparent; color: var(--text-3); padding: 4px 12px;
-             font-size: 10.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+  .seg-btn { border: none; background: transparent; color: var(--text-3); padding: 3px 7px;
+             font-size: 10px; font-weight: 700; cursor: pointer; font-family: inherit;
              letter-spacing: .3px; transition: background .15s, color .15s; text-transform: uppercase; }
   .seg-btn + .seg-btn { border-left: 1px solid var(--border); }
   .seg-btn:hover:not(.seg-active-track):not(.seg-active-block) {
@@ -924,7 +945,10 @@ var dashboardHTML = `<!DOCTYPE html>
             <span class="panel-count" id="rules-count">0</span>
             <button class="rules-toggle-btn" onclick="toggleRulesPanel()" title="Collapse rules panel">›</button>
           </div>
-          <div id="rules-list" style="max-height:calc(100vh - 130px);overflow-y:auto"></div>
+          <div class="rules-search-wrap">
+            <input id="rules-search" class="rules-search-input" type="search" placeholder="Filter rules…" oninput="filterRules()">
+          </div>
+          <div id="rules-list" style="max-height:calc(100vh - 165px);overflow-y:auto"></div>
         </div>
       </div>
       <div class="rules-collapsed-strip" onclick="toggleRulesPanel()" title="Expand rules panel">
@@ -1213,18 +1237,31 @@ async function refresh() {
   }
 }
 
-async function loadRules() {
-  try {
-    var rules = await fetch('/api/rules').then(function(r){ return r.json(); });
-    document.getElementById('rules-count').textContent = rules.length;
-    document.getElementById('rules-list').innerHTML = rules.map(function(r) {
+var _allRules = [];
+
+function ruleLabel(r) {
+  // Use Name if it differs from ID (hand-rolled rules have proper names).
+  // For gitleaks rules Name === ID, so convert kebab-case to Title Case.
+  if (r.name && r.name !== r.id) return r.name;
+  return r.id.replace(/-/g, ' ').replace(/\b\w/g, function(c){ return c.toUpperCase(); });
+}
+
+function renderRules(rules) {
+  var groups = {'high': [], 'medium': [], 'low': []};
+  rules.forEach(function(r){ (groups[r.severity] || groups['low']).push(r); });
+  var html = '';
+  [['high','High'], ['medium','Medium'], ['low','Low']].forEach(function(pair) {
+    var sev = pair[0], label = pair[1];
+    var list = groups[sev];
+    if (!list.length) return;
+    html += '<div class="rules-group-hd sev-hd-'+sev+'">'+label+' <span style="opacity:.5;font-weight:400">('+list.length+')</span></div>';
+    html += list.map(function(r) {
       var isBlock = r.mode === 'block';
-      var sevClass = 'sev-'+(r.severity||'low');
-      var isTrack  = r.mode === 'track';
-      return '<div class="rule-card '+sevClass+'">' +
+      var isTrack = r.mode === 'track';
+      return '<div class="rule-card sev-'+sev+'">' +
         '<div class="rule-top">' +
           '<div class="rule-info">' +
-            '<div class="rule-name" title="'+esc(r.name)+'">'+esc(r.name)+'</div>' +
+            '<div class="rule-name" title="'+esc(r.id)+'">'+esc(ruleLabel(r))+'</div>' +
           '</div>' +
           '<div class="seg" id="seg-'+esc(r.id)+'">' +
             '<button class="seg-btn '+(isTrack?'seg-active-track':'')+'" onclick="setMode(\''+esc(r.id)+'\',\'track\',this)">Track</button>' +
@@ -1232,9 +1269,25 @@ async function loadRules() {
           '</div>' +
         '</div>' +
         '<div class="rule-desc">'+esc(r.description)+'</div>' +
-        '<div class="rule-foot">'+sevTag(r.severity)+'</div>' +
         '</div>';
     }).join('');
+  });
+  document.getElementById('rules-list').innerHTML = html;
+}
+
+function filterRules() {
+  var q = (document.getElementById('rules-search').value || '').toLowerCase();
+  if (!q) { renderRules(_allRules); return; }
+  renderRules(_allRules.filter(function(r){
+    return r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || r.description.toLowerCase().includes(q);
+  }));
+}
+
+async function loadRules() {
+  try {
+    _allRules = await fetch('/api/rules').then(function(r){ return r.json(); });
+    document.getElementById('rules-count').textContent = _allRules.length;
+    renderRules(_allRules);
   } catch(e) { /* ignore */ }
 }
 

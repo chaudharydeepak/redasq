@@ -29,7 +29,7 @@ The risk is well-documented:
 - **Web dashboard** — live feed of all intercepted prompts with matched snippets, status, token usage, session ID, and client identity
 
 ![Prompt Guard Dashboard](dashboard.png)
-- **14 built-in rules** — credentials, PII, tokens, private keys
+- **230 built-in rules** — powered by the [gitleaks](https://github.com/gitleaks/gitleaks) rule database plus hand-rolled rules for PII and credentials
 - **Live rule editing** — change rule modes in the dashboard; changes are written back to `rules.json` instantly
 - **Agent mode** — one-click toggle to switch all rules to redact so long-running agents are never hard-blocked; state persists across restarts; each request tagged in the dashboard
 - **SQLite persistence** — full audit log across restarts
@@ -49,27 +49,45 @@ All other HTTPS traffic is tunnelled through unchanged.
 
 ## Built-in Rules
 
-| Rule | Severity | Default Mode |
+Prompt Guard ships with **230 rules** across two sources:
+
+### gitleaks rules (221)
+
+Patterns are derived from the [gitleaks](https://github.com/gitleaks/gitleaks) secret detection rule database (MIT License) — the same battle-tested ruleset used by GitHub's secret scanning. Rules cover service-specific tokens and credentials for over 200 providers including AWS, GCP, Azure, GitHub, GitLab, Slack, Stripe, Twilio, and more.
+
+| Severity | Mode | Count | What it covers |
+|---|---|---|---|
+| High | Block | 213 | Service-specific tokens with known prefixes (e.g. `AKIA…`, `ghp_…`, `sk-ant-api03-…`) |
+| Medium | Block | 8 | Broad structural patterns: generic API key assignments, curl credentials, k8s Secret YAML, JWTs |
+
+### Hand-rolled rules (9)
+
+| Rule | Severity | Mode |
 |---|---|---|
-| AWS Access Key (`AKIA…`) | High | Block |
-| AWS Secret Key | High | Block |
-| OpenAI API Key (`sk-…`) | High | Block |
-| Anthropic API Key (`sk-ant-…`) | High | Block |
-| GitHub Token (`ghp_`, `gho_`, `github_pat_`, …) | High | Block |
+| Social Security Number | High | Block |
+| Credit Card Number (Luhn-validated) | High | Block |
+| Database Connection String | High | Block |
 | HTTP Basic Auth credential | High | Block |
 | HTTP Bearer token | High | Block |
-| Private Key (PEM block) | High | Block |
-| Social Security Number | High | Block |
-| Credit Card Number | High | Block |
-| JWT Token | Medium | Track |
-| Generic Secret / Password assignment | Medium | Track |
+| Generic Secret / Password assignment | Medium | Block |
 | Email Address | Low | Track |
 | Internal IP Address (RFC-1918) | Low | Track |
 
 **Block** — request is rejected; nothing is forwarded to the AI.
 **Track** — matched value is replaced with `[REDACTED]` in the forwarded request; the AI responds to the sanitised prompt.
 
-Rules can be switched between modes at any time from the dashboard without restarting.
+All rules are visible in the dashboard and can be switched between modes at any time without restarting. Mode changes are written back to `rules.json` immediately.
+
+### Updating gitleaks patterns
+
+To pull in new rules from a future gitleaks release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gitleaks/gitleaks/main/config/gitleaks.toml \
+     -o /tmp/gitleaks.toml
+python3 scripts/gen_rules.py /tmp/gitleaks.toml > inspector/rules.go
+go build ./...
+```
 
 ## Requirements
 
@@ -160,7 +178,7 @@ Rules are configured in `~/.prompt-guard/rules.json`. The file is created automa
 {
   "overrides": [
     { "id": "email", "mode": "block" },
-    { "id": "jwt-token", "severity": "high" }
+    { "id": "generic-api-key", "severity": "high" }
   ]
 }
 ```
@@ -212,20 +230,27 @@ Prompt Guard will CONNECT through the corporate proxy for all outbound traffic, 
 
 ## Architecture
 
-```
-Your app (VS Code, curl, etc.)
-  → HTTP_PROXY / HTTPS_PROXY
-    → prompt-guard proxy (:8080)
-      ├── Non-target hosts → blind tunnel (unchanged)
-      └── Target hosts (OpenAI, Anthropic, Copilot)
-            → TLS MITM (local CA; cert install optional)
-              → parse JSON body → extract user prompt text
-                → run rules
-                  ├── block match  → reject request; return block message to client
-                  ├── track match  → redact value in body; forward sanitised request
-                  └── clean        → forward unchanged
-                → store in SQLite (prompt, status, matched snippets)
-                  → web dashboard (:7778) reads SQLite
+```mermaid
+flowchart TD
+    Client["🖥️ AI Client\n(VS Code · Claude CLI · curl)"]
+    PG["🛡️ Prompt Guard\n:8080"]
+    Rules["230 Detection Rules\n(gitleaks + hand-rolled)"]
+    DB[("SQLite\naudit log")]
+    Dashboard["📊 Dashboard\n:7778"]
+    LLM["☁️ LLM APIs\n(OpenAI · Anthropic · Copilot)"]
+    Blocked["❌ Blocked\nError returned to client\nNothing forwarded"]
+    Redacted["✂️ Redacted\nSecret replaced with [REDACTED]\nSanitised prompt forwarded"]
+    Clean["✅ Clean\nForwarded unchanged"]
+
+    Client -->|"HTTPS prompt\nvia HTTP_PROXY"| PG
+    PG -->|"decrypt · extract text"| Rules
+    Rules -->|"block match"| Blocked
+    Rules -->|"track match"| Redacted
+    Rules -->|"no match"| Clean
+    Blocked -->|"log"| DB
+    Redacted -->|"log + forward"| LLM
+    Clean -->|"log + forward"| LLM
+    DB --> Dashboard
 ```
 
 ```
@@ -237,12 +262,14 @@ prompt-guard/
 │   └── intercept.go     Prompt extraction from OpenAI / Anthropic JSON bodies
 ├── inspector/
 │   ├── engine.go        Rule matching engine (block, redact, snippet capture)
-│   ├── rules.go         Built-in rules (regex + metadata)
+│   ├── rules.go         Built-in rules (230 rules; hand-rolled + gitleaks-derived)
 │   └── config.go        rules.json loading and write-back
 ├── store/
 │   └── store.go         SQLite persistence
-└── web/
-    └── web.go           Web dashboard (embedded HTML)
+├── web/
+│   └── web.go           Web dashboard (embedded HTML)
+└── scripts/
+    └── gen_rules.py     Converts gitleaks.toml → inspector/rules.go
 ```
 
 ## License
