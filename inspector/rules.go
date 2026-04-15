@@ -1898,7 +1898,7 @@ var BuiltinRules = []Rule{
 		ID:          "slack-webhook-url",
 		Name:        "slack-webhook-url",
 		Description: "Discovered a Slack Webhook, which could lead to unauthorized message posting and data leakage in Slack channels.",
-		Pattern:     regexp.MustCompile(`\bhttps?://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}`),
+		Pattern:     regexp.MustCompile(`\bhttps?://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}(?:[^A-Za-z0-9+/]|$)`), // codeql[go/regex/missing-regexp-anchor]
 		Severity:    SeverityHigh,
 		Mode:        ModeBlock,
 		Replacement: "[REDACTED]",
