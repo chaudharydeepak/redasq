@@ -58,7 +58,7 @@ import tomllib
 # Broad/structural patterns keep SeverityMedium so the UI left-border colour
 # still distinguishes them from specific token rules (SeverityHigh).
 MEDIUM_IDS = {
-    "generic-api-key",        # matches any `key = value` broadly
+    "generic-api-key",        # matches any `key = value` broadly — ModeTrack (see below)
     "hashicorp-tf-password",  # matches "password" keyword broadly
     "curl-auth-header",       # curl commands containing real credentials
     "curl-auth-user",         # curl commands containing real credentials
@@ -66,6 +66,14 @@ MEDIUM_IDS = {
     "nuget-config-password",  # XML config with passwords
     "jwt",                    # JSON Web Tokens
     "jwt-base64",             # base64-encoded JWTs
+}
+
+# Rules that default to ModeTrack instead of ModeBlock.
+# generic-api-key is too broad — it fires false positives on SQL schema content
+# injected by tools like Copilot CLI, blocking every request. Track redacts
+# matches without hard-stopping the request.
+TRACK_IDS = {
+    "generic-api-key",
 }
 
 
@@ -247,7 +255,7 @@ def main():
         sg = r.get("secretGroup")
         replacement = f"${{{sg}}}[REDACTED]" if sg is not None else "[REDACTED]"
         pat_str = go_string(regex)
-        mode = "ModeBlock"
+        mode = "ModeTrack" if rule_id in TRACK_IDS else "ModeBlock"
         severity = "SeverityMedium" if rule_id in MEDIUM_IDS else "SeverityHigh"
 
         out.append(f"""\t{{

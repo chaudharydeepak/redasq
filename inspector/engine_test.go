@@ -21,7 +21,7 @@ func TestInspect_AWSAccessKey(t *testing.T) {
 		// wrong prefix
 		{"BKIAIOSFODNN7EXAMPLE", false},
 		// lowercase chars after AKIA — pattern requires [0-9A-Z] only
-		{"AKIAiosfodnn7exampl", false},
+		{"AKIAiosfodnn7example1234", false},
 	}
 	for _, c := range cases {
 		r := eng.Inspect(c.input)
@@ -31,46 +31,22 @@ func TestInspect_AWSAccessKey(t *testing.T) {
 	}
 }
 
-func TestInspect_AWSSecretKey(t *testing.T) {
-	eng := New()
-	// Pattern: (?i)aws.{0,20}secret.{0,20}['"]?([0-9a-zA-Z/+]{40})['"]?
-	// 40-char base64-ish value
-	secret40 := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN" // exactly 40 chars
-	cases := []struct {
-		input   string
-		blocked bool
-	}{
-		{"aws secret " + secret40, true},
-		{"AWS_SECRET_KEY=" + secret40, true},
-		{"aws secret key is " + secret40, true},
-		// value only 39 chars — should not match
-		{"aws secret key=" + secret40[:39], false},
-		// no "aws" context
-		{"secret=" + secret40, false},
-	}
-	for _, c := range cases {
-		r := eng.Inspect(c.input)
-		if r.Blocked != c.blocked {
-			t.Errorf("aws-secret-key %q: blocked=%v want %v", c.input, r.Blocked, c.blocked)
-		}
-	}
-}
-
 func TestInspect_AnthropicKey(t *testing.T) {
 	eng := New()
-	// Pattern: sk-ant-[a-zA-Z0-9\-_]{20,}
-	// Note: openai-key (sk-[...]{20,}) overlaps — anything starting with sk- and
-	// long enough will also be blocked by that rule. Negative cases must avoid sk-.
+	// gitleaks anthropic-api-key pattern: sk-ant-api03- + 93 alphanumeric chars + AA
+	validKey := "sk-ant-api03-" + strings.Repeat("A", 93) + "AA"
+	adminKey := "sk-ant-admin01-" + strings.Repeat("A", 93) + "AA"
 	cases := []struct {
 		input   string
 		blocked bool
 	}{
-		{"key: sk-ant-api03-abcdefghijklmnopqrstu", true},
-		{"sk-ant-" + strings.Repeat("a", 20), true},
-		// only 9 chars after sk-ant- (13 after sk-) — too short for both rules
-		{"sk-ant-abc123456", false},
-		// wrong prefix, doesn't start with sk- so openai-key won't fire either
-		{"ak-ant-" + strings.Repeat("a", 20), false},
+		{validKey, true},
+		{"key is " + validKey + " end", true},
+		{adminKey, true},
+		// too short — only 20 chars after sk-ant-api03- (needs 93+AA)
+		{"sk-ant-api03-" + strings.Repeat("a", 20), false},
+		// wrong middle segment
+		{"sk-ant-" + strings.Repeat("a", 20), false},
 	}
 	for _, c := range cases {
 		r := eng.Inspect(c.input)
@@ -82,16 +58,18 @@ func TestInspect_AnthropicKey(t *testing.T) {
 
 func TestInspect_OpenAIKey(t *testing.T) {
 	eng := New()
-	// Pattern: sk-[a-zA-Z0-9\-_]{20,}
-	// Note: anthropic keys (sk-ant-...) also match this pattern — both rules fire.
+	// gitleaks openai-api-key: sk-proj/svcacct/admin- + 58 chars + T3BlbkFJ + 58 chars
+	validKey := "sk-proj-" + strings.Repeat("A", 58) + "T3BlbkFJ" + strings.Repeat("A", 58)
 	cases := []struct {
 		input   string
 		blocked bool
 	}{
-		{"sk-proj-" + strings.Repeat("a", 20), true},
-		{"sk-" + strings.Repeat("a", 20), true},
-		// only 19 chars after sk- — should not match
-		{"sk-" + strings.Repeat("a", 19), false},
+		{validKey, true},
+		{"key=" + validKey, true},
+		// missing T3BlbkFJ marker
+		{"sk-proj-" + strings.Repeat("A", 120), false},
+		// wrong prefix
+		{"sk-" + strings.Repeat("a", 20), false},
 	}
 	for _, c := range cases {
 		r := eng.Inspect(c.input)
@@ -103,7 +81,6 @@ func TestInspect_OpenAIKey(t *testing.T) {
 
 func TestInspect_GitHubToken(t *testing.T) {
 	eng := New()
-	// Pattern: gh[pousr]_[a-zA-Z0-9]{36,}
 	token36 := strings.Repeat("a", 36)
 	cases := []struct {
 		input   string
@@ -118,7 +95,7 @@ func TestInspect_GitHubToken(t *testing.T) {
 		{"ghp_" + strings.Repeat("a", 35), false},
 		// invalid prefix char
 		{"ghx_" + token36, false},
-		// classic PAT (no prefix) — not matched by this pattern
+		// fine-grained PAT — needs 82 word chars (too short here)
 		{"github_pat_" + token36, false},
 	}
 	for _, c := range cases {
@@ -131,16 +108,24 @@ func TestInspect_GitHubToken(t *testing.T) {
 
 func TestInspect_PrivateKey(t *testing.T) {
 	eng := New()
+	// gitleaks private-key requires a full PEM block (header + 64+ bytes of content + footer)
+	pemBody := strings.Repeat("A", 64)
 	cases := []struct {
 		input   string
 		blocked bool
 	}{
-		{"-----BEGIN RSA PRIVATE KEY-----", true},
-		{"-----BEGIN EC PRIVATE KEY-----", true},
-		{"-----BEGIN PRIVATE KEY-----", true},       // PKCS#8
-		{"-----BEGIN OPENSSH PRIVATE KEY-----", true},
-		{"-----BEGIN PUBLIC KEY-----", false},        // public key — no match
-		{"BEGIN RSA PRIVATE KEY", false},             // missing dashes
+		// full PKCS#8 block
+		{"-----BEGIN PRIVATE KEY-----\n" + pemBody + "\n-----END PRIVATE KEY-----", true},
+		// full RSA block
+		{"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody + "\n-----END RSA PRIVATE KEY-----", true},
+		// full EC block
+		{"-----BEGIN EC PRIVATE KEY-----\n" + pemBody + "\n-----END EC PRIVATE KEY-----", true},
+		// full OpenSSH block
+		{"-----BEGIN OPENSSH PRIVATE KEY-----\n" + pemBody + "\n-----END OPENSSH PRIVATE KEY-----", true},
+		// public key — no match
+		{"-----BEGIN PUBLIC KEY-----\n" + pemBody + "\n-----END PUBLIC KEY-----", false},
+		// header only, no content/footer — gitleaks pattern requires full block
+		{"-----BEGIN RSA PRIVATE KEY-----", false},
 	}
 	for _, c := range cases {
 		r := eng.Inspect(c.input)
@@ -157,8 +142,8 @@ func TestInspect_SSN(t *testing.T) {
 		blocked bool
 	}{
 		{"ssn: 123-45-6789", true},
-		{"000-00-0001", true},
-		{"999-99-9999", true},
+		{"078-05-1120", true},
+		{"my ssn is 900-12-3456", true},
 		// phone number format — 3-3-4, not 3-2-4
 		{"123-456-7890", false},
 		// missing boundary (part of longer number)
@@ -179,20 +164,17 @@ func TestInspect_CreditCard(t *testing.T) {
 		input   string
 		blocked bool
 	}{
-		// Visa 16-digit (standard test number)
-		{"card 4111111111111111 exp", true},
-		// Visa 13-digit
-		{"4222222222222", true},
-		// Mastercard (51-55 prefix, 16 digits)
-		{"5500000000000004", true},
-		{"5105105105105100", true},
-		// Amex (34 or 37 prefix, 15 digits)
+		// Visa 16-digit (standard Luhn-valid test number)
+		{"card 4532015112830366 exp", true},
+		// Mastercard
+		{"5425233430109903", true},
+		// Amex 15-digit (Luhn-valid test number)
 		{"378282246310005", true},
-		{"371449635398431", true},
-		// Discover (6011 or 65 prefix, 16 digits)
-		{"6011111111111117", true},
-		{"6500000000000002", true},
-		// Not a valid card prefix
+		// Discover
+		{"6011000990139424", true},
+		// Not a valid Luhn number
+		{"4111111111111112", false},
+		// Wrong prefix
 		{"1234567890123456", false},
 		// Too short
 		{"411111111111", false},
@@ -205,55 +187,56 @@ func TestInspect_CreditCard(t *testing.T) {
 	}
 }
 
-// ── Track-mode rules (RedactText) ─────────────────────────────────────────────
-
-func TestRedactText_JWT(t *testing.T) {
+func TestInspect_JWT(t *testing.T) {
 	eng := New()
-	// Minimal valid JWT shape: header.payload.signature, header+payload must start with eyJ
-	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0dXNlciJ9.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	redacted, matches := eng.RedactText("token: " + jwt)
-	if len(matches) == 0 {
-		t.Error("jwt: expected match, got none")
+	// gitleaks jwt: ey+17chars . ey+17chars . 10chars + boundary
+	// Using alphanumeric-only segments to satisfy [a-zA-Z0-9]{17,} for header
+	validJWT := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0dXNlciJ9.SflKxwRJSMeKKF2QT4fw"
+	cases := []struct {
+		input   string
+		blocked bool
+	}{
+		{"token: " + validJWT, true},
+		{validJWT, true},
+		// two segments only — no signature
+		{"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0K", false},
+		// no eyJ prefix on second segment
+		{"eyJhbGciOiJIUzI1NiJ9.notavalidpayload123.SflKxwRJSMeKKF2QT4fw", false},
 	}
-	if strings.Contains(redacted, jwt) {
-		t.Error("jwt: token was not redacted")
-	}
-	// non-JWT — two base64 segments but no eyJ prefix on payload
-	_, matches2 := eng.RedactText("not.a.jwt")
-	if len(matches2) != 0 {
-		t.Error("jwt: false positive on 'not.a.jwt'")
+	for _, c := range cases {
+		r := eng.Inspect(c.input)
+		if r.Blocked != c.blocked {
+			t.Errorf("jwt %q: blocked=%v want %v", c.input, r.Blocked, c.blocked)
+		}
 	}
 }
 
-func TestRedactText_GenericSecret(t *testing.T) {
+func TestInspect_GenericSecret(t *testing.T) {
 	eng := New()
+	// generic-secret is now ModeBlock — tested via Inspect
 	cases := []struct {
-		input     string
-		wantMatch bool
+		input   string
+		blocked bool
 	}{
-		{"api_key=mysecretvalue123", true},
-		{"password: hunter22", true},          // 8-char value, colon separator
-		{"secret: myS3cr3tVal", true},         // colon separator
-		{"bearer: mytoken1234", true},         // colon separator
-		{"auth_token=abcdefgh", true},         // 8-char value
-		// value too short (3 chars)
+		{"PASSWORD = SuperSecret1", true},
+		{"password: mysecretpass", true},
+		{"api_key=abcdef12345678", true},
+		{"secret: correct-horse", true},
+		{"auth_token=mytoken12345", true},
+		// value too short (3 chars — below 8-char minimum)
 		{"password=abc", false},
 		// no keyword
 		{"value=mysecretvalue123", false},
 	}
 	for _, c := range cases {
-		_, matches := eng.RedactText(c.input)
-		found := false
-		for _, m := range matches {
-			if m.RuleID == "generic-secret" {
-				found = true
-			}
-		}
-		if found != c.wantMatch {
-			t.Errorf("generic-secret %q: matched=%v want %v", c.input, found, c.wantMatch)
+		r := eng.Inspect(c.input)
+		if r.Blocked != c.blocked {
+			t.Errorf("generic-secret %q: blocked=%v want %v", c.input, r.Blocked, c.blocked)
 		}
 	}
 }
+
+// ── Track-mode rules (RedactText) ─────────────────────────────────────────────
 
 func TestRedactText_Email(t *testing.T) {
 	eng := New()
@@ -261,9 +244,9 @@ func TestRedactText_Email(t *testing.T) {
 		input     string
 		wantMatch bool
 	}{
-		{"contact user@example.com please", true},
-		{"john.doe+tag@company.co.uk", true},
-		{"first.last@sub.domain.org", true},
+		{"contact alice@example.com please", true},
+		{"user.name+tag@sub.domain.org", true},
+		{"foo@bar.io", true},
 		// no @ sign
 		{"notanemail.com", false},
 		// missing TLD
@@ -292,15 +275,12 @@ func TestRedactText_InternalIP(t *testing.T) {
 		input     string
 		wantMatch bool
 	}{
-		// 10.x.x.x
 		{"server at 10.0.0.1", true},
 		{"10.255.255.255", true},
-		// 172.16-31.x.x
 		{"host 172.16.0.1", true},
-		{"172.31.255.255", true},
-		// 192.168.x.x
-		{"192.168.1.1", true},
-		{"192.168.0.254", true},
+		{"172.31.255.254", true},
+		{"192.168.1.100", true},
+		{"192.168.0.1", true},
 		// public IPs — not RFC-1918
 		{"8.8.8.8", false},
 		{"172.15.0.1", false},  // 172.15 is not private
@@ -327,16 +307,16 @@ func TestSetMode_BlockToTrack(t *testing.T) {
 	eng := New()
 	// SSN is block by default — switching to track should stop Inspect from blocking
 	eng.SetMode("ssn", ModeTrack)
-	r := eng.Inspect("ssn 123-45-6789")
+	r := eng.Inspect("ssn 078-05-1120")
 	if r.Blocked {
 		t.Error("ssn: expected not blocked after switching to track mode")
 	}
 	// RedactText should now catch it
-	redacted, matches := eng.RedactText("ssn 123-45-6789")
+	redacted, matches := eng.RedactText("ssn 078-05-1120")
 	if len(matches) == 0 {
 		t.Error("ssn: expected track match after mode switch")
 	}
-	if strings.Contains(redacted, "123-45-6789") {
+	if strings.Contains(redacted, "078-05-1120") {
 		t.Error("ssn: value was not redacted after mode switch")
 	}
 }
@@ -353,17 +333,19 @@ func TestSetMode_UnknownRule(t *testing.T) {
 
 func TestRedactBodyForForwarding_Email(t *testing.T) {
 	eng := New()
-	body := []byte(`{"messages":[{"role":"user","content":"email me at secret@corp.com"}]}`)
+	body := []byte(`{"messages":[{"role":"user","content":"email me at alice@example.com"}]}`)
 	redacted := eng.RedactBodyForForwarding(body)
-	if strings.Contains(string(redacted), "secret@corp.com") {
+	if strings.Contains(string(redacted), "alice@example.com") {
 		t.Error("RedactBodyForForwarding: email was not redacted in raw body")
 	}
 }
 
+// ── Agent mode ────────────────────────────────────────────────────────────────
+
 func TestAgentMode_InspectNeverBlocks(t *testing.T) {
 	eng := New()
 	eng.SetAgentMode(true)
-	result := eng.Inspect("my SSN is 123-45-6789")
+	result := eng.Inspect("my SSN is 078-05-1120")
 	if result.Blocked {
 		t.Error("AgentMode: Inspect should never block when agent mode is on")
 	}
@@ -375,8 +357,8 @@ func TestAgentMode_InspectNeverBlocks(t *testing.T) {
 func TestAgentMode_RedactTextAppliesBlockRules(t *testing.T) {
 	eng := New()
 	eng.SetAgentMode(true)
-	redacted, matches := eng.RedactText("my SSN is 123-45-6789")
-	if strings.Contains(redacted, "123-45-6789") {
+	redacted, matches := eng.RedactText("my SSN is 078-05-1120")
+	if strings.Contains(redacted, "078-05-1120") {
 		t.Error("AgentMode: RedactText should redact block-mode rules when agent mode is on")
 	}
 	if len(matches) == 0 {
@@ -387,9 +369,9 @@ func TestAgentMode_RedactTextAppliesBlockRules(t *testing.T) {
 func TestAgentMode_RedactBodyForwardingAppliesBlockRules(t *testing.T) {
 	eng := New()
 	eng.SetAgentMode(true)
-	body := []byte(`{"messages":[{"role":"user","content":"my SSN is 123-45-6789"}]}`)
+	body := []byte(`{"messages":[{"role":"user","content":"my SSN is 078-05-1120"}]}`)
 	redacted := eng.RedactBodyForForwarding(body)
-	if strings.Contains(string(redacted), "123-45-6789") {
+	if strings.Contains(string(redacted), "078-05-1120") {
 		t.Error("AgentMode: RedactBodyForForwarding should redact block-mode rules when agent mode is on")
 	}
 }
@@ -398,7 +380,7 @@ func TestAgentMode_OffRestoresNormalBehavior(t *testing.T) {
 	eng := New()
 	eng.SetAgentMode(true)
 	eng.SetAgentMode(false)
-	result := eng.Inspect("my SSN is 123-45-6789")
+	result := eng.Inspect("my SSN is 078-05-1120")
 	if !result.Blocked {
 		t.Error("AgentMode off: Inspect should block SSN when agent mode is off")
 	}

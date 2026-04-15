@@ -31,8 +31,8 @@ func ruleMatched(matches []Match, ruleID string) bool {
 func TestSpringProperties_DSPassword(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.properties")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.properties: expected generic-secret to match spring.datasource.password")
 	}
 }
@@ -53,16 +53,16 @@ func TestSpringProperties_AWSAccessKey(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.properties")
 	result := eng.Inspect(content)
-	if !ruleMatched(result.Matches, "aws-access-key") {
-		t.Error("application.properties: expected aws-access-key to match cloud.aws.credentials.access-key")
+	if !ruleMatched(result.Matches, "aws-access-token") {
+		t.Error("application.properties: expected aws-access-token to match cloud.aws.credentials.access-key")
 	}
 }
 
 func TestSpringProperties_OAuthClientSecret(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.properties")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.properties: expected generic-secret to match oauth2 client-secret")
 	}
 }
@@ -70,8 +70,8 @@ func TestSpringProperties_OAuthClientSecret(t *testing.T) {
 func TestSpringProperties_JWTSecret(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.properties")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.properties: expected generic-secret to match jwt.secret")
 	}
 }
@@ -79,8 +79,8 @@ func TestSpringProperties_JWTSecret(t *testing.T) {
 func TestSpringProperties_RedisPassword(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.properties")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.properties: expected generic-secret to match spring.redis.password")
 	}
 }
@@ -88,8 +88,8 @@ func TestSpringProperties_RedisPassword(t *testing.T) {
 func TestSpringProperties_MailPassword(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.properties")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.properties: expected generic-secret to match spring.mail.password")
 	}
 }
@@ -139,8 +139,8 @@ func TestSpringProperties_RedactedDoesNotContainSecrets(t *testing.T) {
 func TestSpringYAML_DSPassword(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.yml")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.yml: expected generic-secret to match spring.datasource.password")
 	}
 }
@@ -161,16 +161,16 @@ func TestSpringYAML_AWSAccessKey(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.yml")
 	result := eng.Inspect(content)
-	if !ruleMatched(result.Matches, "aws-access-key") {
-		t.Error("application.yml: expected aws-access-key to match cloud.aws.credentials.access-key")
+	if !ruleMatched(result.Matches, "aws-access-token") {
+		t.Error("application.yml: expected aws-access-token to match cloud.aws.credentials.access-key")
 	}
 }
 
 func TestSpringYAML_RedisPassword(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.yml")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.yml: expected generic-secret to match spring.redis.password")
 	}
 }
@@ -178,8 +178,8 @@ func TestSpringYAML_RedisPassword(t *testing.T) {
 func TestSpringYAML_OAuthClientSecret(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.yml")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.yml: expected generic-secret to match oauth2 client-secret")
 	}
 }
@@ -187,8 +187,8 @@ func TestSpringYAML_OAuthClientSecret(t *testing.T) {
 func TestSpringYAML_JWTSecret(t *testing.T) {
 	eng := New()
 	content := loadFixture(t, "application.yml")
-	_, matches := eng.RedactText(content)
-	if !ruleMatched(matches, "generic-secret") {
+	result := eng.Inspect(content)
+	if !ruleMatched(result.Matches, "generic-secret") {
 		t.Error("application.yml: expected generic-secret to match jwt.secret")
 	}
 }

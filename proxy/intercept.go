@@ -60,9 +60,10 @@ func ExtractPrompts(body []byte) []string {
 
 	var raw []string
 
-	// Include Anthropic system prompt on the first turn only.
-	// On subsequent turns it has already been sent and inspected.
-	if lastAssistant == -1 && len(envelope.System) > 0 {
+	// Always scan the system prompt — Copilot and other clients refresh it on
+	// every request with current file context, so secrets can appear in it on
+	// any turn, not just the first.
+	if len(envelope.System) > 0 {
 		raw = append(raw, extractContentText(envelope.System)...)
 	}
 
@@ -84,24 +85,36 @@ func ExtractPrompts(body []byte) []string {
 		} else {
 			var items []struct {
 				Role    string `json:"role"`
+				Type    string `json:"type"`   // "function_call" | "function_call_output"
+				Output  string `json:"output"` // function_call_output payload
 				Content []struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
 				} `json:"content"`
 			}
 			if json.Unmarshal(envelope.InputRaw, &items) == nil {
+				// Treat both role=assistant messages and function_call items as
+				// assistant turns when finding the current-turn boundary.
 				lastAsst := -1
 				for i := len(items) - 1; i >= 0; i-- {
-					if items[i].Role == "assistant" {
+					if items[i].Role == "assistant" || items[i].Type == "function_call" {
 						lastAsst = i
 						break
 					}
 				}
-				// Include instructions on first turn only (no prior assistant).
-				if lastAsst == -1 && envelope.Instructions != "" {
+				// Always scan instructions — Copilot CLI refreshes file context here
+				// on every request, not just the first turn.
+				if envelope.Instructions != "" {
 					raw = append(raw, envelope.Instructions)
 				}
 				for i := lastAsst + 1; i < len(items); i++ {
+					// function_call_output: tool result that may contain file contents.
+					if items[i].Type == "function_call_output" {
+						if t := strings.TrimSpace(items[i].Output); t != "" {
+							raw = append(raw, t)
+						}
+						continue
+					}
 					for _, c := range items[i].Content {
 						if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
 							raw = append(raw, strings.TrimSpace(c.Text))

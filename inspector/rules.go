@@ -829,7 +829,7 @@ var BuiltinRules = []Rule{
 		Description: "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
 		Pattern:     regexp.MustCompile(`(?i)[\w.-]{0,50}?(?:access|auth|(?-i:[Aa]pi|API)|credential|creds|key|passw(?:or)?d|secret|token)(?:[ \t\w.-]{0,20})[\s'"]{0,3}(?:=|>|:{1,3}=|\|\||:|=>|\?=|,)[\x60'"\s=]{0,5}([\w.=-]{10,150}|[a-z0-9][a-z0-9+/]{11,}={0,3})(?:[\x60'"\s;]|\\[nr]|$)`),
 		Severity:    SeverityMedium,
-		Mode:        ModeBlock,
+		Mode:        ModeTrack,
 		Replacement: "[REDACTED]",
 	},
 	{

@@ -415,7 +415,9 @@ func TestExtract_ResponsesAPI_InputArray(t *testing.T) {
 	}
 }
 
-func TestExtract_ResponsesAPI_InstructionsExcludedAfterFirstTurn(t *testing.T) {
+func TestExtract_ResponsesAPI_InstructionsAlwaysScanned(t *testing.T) {
+	// Instructions are scanned on every turn — Copilot CLI refreshes file context
+	// there on each request, so we must not skip it after the first assistant turn.
 	body := `{
 		"model": "gpt-5-mini",
 		"instructions": "You are the GitHub Copilot CLI.",
@@ -429,11 +431,58 @@ func TestExtract_ResponsesAPI_InstructionsExcludedAfterFirstTurn(t *testing.T) {
 	if !containsAll(p, "turn 2") {
 		t.Errorf("current turn not extracted: %v", p)
 	}
-	if containsAll(p, "You are the GitHub Copilot CLI") {
-		t.Errorf("instructions should not be re-extracted after first turn: %v", p)
+	if !containsAll(p, "You are the GitHub Copilot CLI") {
+		t.Errorf("instructions should be scanned on every turn: %v", p)
 	}
 	if containsAll(p, "turn 1") {
 		t.Errorf("history should not be re-inspected: %v", p)
+	}
+}
+
+func TestExtract_ResponsesAPI_FunctionCallOutput(t *testing.T) {
+	// Copilot CLI swe-agent reads files via tool calls; the file contents come
+	// back as function_call_output items and must be scanned for secrets.
+	body := `{
+		"model": "gpt-5-mini",
+		"instructions": "You are the GitHub Copilot CLI.",
+		"input": [
+			{"role": "user", "content": [{"type": "input_text", "text": "what is the password?"}]},
+			{"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{\"path\":\"/app/config.py\"}"},
+			{"type": "function_call_output", "call_id": "call_1", "output": "PASSWORD = \"s3cr3tP@ssw0rd\""}
+		]
+	}`
+	p := ExtractPrompts([]byte(body))
+	if !containsAll(p, "PASSWORD") {
+		t.Errorf("function_call_output not extracted: %v", p)
+	}
+	if !containsAll(p, "s3cr3tP@ssw0rd") {
+		t.Errorf("secret in function_call_output not extracted: %v", p)
+	}
+	// History before function_call boundary should not be re-scanned.
+	if containsAll(p, "what is the password?") {
+		t.Errorf("user message before function_call should not be re-extracted: %v", p)
+	}
+}
+
+func TestExtract_ResponsesAPI_FunctionCallOutputNotRepeatedInHistory(t *testing.T) {
+	// On the NEXT turn, the function_call_output is history — must not be re-scanned.
+	body := `{
+		"model": "gpt-5-mini",
+		"instructions": "You are the GitHub Copilot CLI.",
+		"input": [
+			{"role": "user", "content": [{"type": "input_text", "text": "turn 1"}]},
+			{"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"},
+			{"type": "function_call_output", "call_id": "call_1", "output": "old file content"},
+			{"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+			{"role": "user", "content": [{"type": "input_text", "text": "turn 2"}]}
+		]
+	}`
+	p := ExtractPrompts([]byte(body))
+	if !containsAll(p, "turn 2") {
+		t.Errorf("current user turn not extracted: %v", p)
+	}
+	if containsAll(p, "old file content") {
+		t.Errorf("function_call_output from history should not be re-scanned: %v", p)
 	}
 }
 

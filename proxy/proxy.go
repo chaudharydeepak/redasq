@@ -203,6 +203,15 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		displayPrompt := ExtractUserQuery(body)
 		debugf("EXTRACTED: %d prompt(s)", len(prompts))
 		debugf("  query: %.120s", displayPrompt)
+		if Debug {
+			for i, seg := range prompts {
+				end := 300
+				if len(seg) < end {
+					end = len(seg)
+				}
+				debugf("  PROMPT[%d] (%d chars): %.300s", i, len(seg), seg)
+			}
+		}
 		if Debug && len(prompts) == 0 && len(body) > 0 && (body[0] == '{' || body[0] == '[') {
 			// Print top-level keys to understand the body shape without dumping 93KB.
 			var top map[string]json.RawMessage
