@@ -91,6 +91,9 @@ func registerRoutes(mux *http.ServeMux, db *store.Store, eng *inspector.Engine, 
 	mux.HandleFunc("/api/export", func(w http.ResponseWriter, r *http.Request) {
 		apiExport(w, r, db)
 	})
+	mux.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {
+		apiScan(w, r, eng)
+	})
 	mux.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -378,6 +381,54 @@ Total     : %d prompts (%d blocked, %d redacted)
 			text,
 		)
 	}
+}
+
+// apiScan is a dry-run rule tester — runs the inspector against submitted text
+// without forwarding anything to an LLM.
+func apiScan(w http.ResponseWriter, r *http.Request, eng *inspector.Engine) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Text == "" {
+		http.Error(w, "invalid JSON or empty text", http.StatusBadRequest)
+		return
+	}
+
+	inspectResult := eng.Inspect(body.Text)
+	redacted, trackMatches := eng.RedactText(body.Text)
+
+	type matchOut struct {
+		RuleID   string `json:"rule_id"`
+		RuleName string `json:"rule_name"`
+		Severity string `json:"severity"`
+		Mode     string `json:"mode"`
+		Snippet  string `json:"snippet"`
+	}
+	allMatches := []matchOut{}
+	for _, m := range inspectResult.Matches {
+		allMatches = append(allMatches, matchOut{m.RuleID, m.RuleName, m.Severity, m.Mode, m.Snippet})
+	}
+	for _, m := range trackMatches {
+		allMatches = append(allMatches, matchOut{m.RuleID, m.RuleName, m.Severity, m.Mode, m.Snippet})
+	}
+
+	status := "clean"
+	if inspectResult.Blocked {
+		status = "blocked"
+	} else if len(trackMatches) > 0 {
+		status = "redacted"
+	}
+
+	jsonResponse(w, map[string]any{
+		"status":   status,
+		"matches":  allMatches,
+		"redacted": redacted,
+		"original": body.Text,
+	})
 }
 
 func jsonResponse(w http.ResponseWriter, v any) {
@@ -791,6 +842,10 @@ var dashboardHTML = `<!DOCTYPE html>
   <button class="icon-btn" onclick="toggleExport()" title="Export prompts" id="export-btn">
     <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0-4-4m4 4 4-4M4 20h16"/></svg>
   </button>
+  <!-- Rule tester -->
+  <button class="icon-btn" onclick="toggleTester()" title="Rule Tester — test text against rules without sending to any LLM" id="tester-btn">
+    <svg viewBox="0 0 24 24"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4m0 0h18"/></svg>
+  </button>
   <!-- Agent mode toggle -->
   <button onclick="toggleAgentMode()" id="agent-btn" class="agent-mode-btn"
     title="Agent Mode: when ON, all rules switch to redact — sensitive data is masked before reaching the AI but requests are never blocked. Use when running long-lived agents that must not be interrupted.">
@@ -829,6 +884,48 @@ var dashboardHTML = `<!DOCTYPE html>
   <button class="ftab" style="width:100%" onclick="doExport('custom')">Download</button>
   <div style="margin-top:10px;font-size:10.5px;color:var(--text-3);line-height:1.5">
     Plain text file. Paste into any LLM to analyse your usage patterns.
+  </div>
+</div>
+
+<!-- Rule Tester backdrop -->
+<div id="tester-backdrop" onclick="toggleTester()" style="display:none;position:fixed;inset:0;z-index:199;background:rgba(0,0,0,.45)"></div>
+
+<!-- Rule Tester modal -->
+<div id="tester-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  z-index:200;background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;
+  padding:28px 32px;width:680px;max-width:calc(100vw - 48px);box-shadow:0 16px 48px rgba(0,0,0,.45);">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+    <div style="font-weight:700;font-size:15px">Rule Tester</div>
+    <button onclick="toggleTester()" style="background:transparent;border:none;color:var(--text-3);
+      font-size:18px;cursor:pointer;line-height:1;padding:2px 6px">&times;</button>
+  </div>
+  <div style="font-size:12px;color:var(--text-3);margin-bottom:16px">Paste any text — rules fire locally, nothing is forwarded to an LLM. Note: this tests raw text only; real clients may wrap prompts in XML, inject file contents via tool calls, or structure messages differently — those scenarios won't be captured here.</div>
+  <textarea id="tester-input" placeholder="Paste a prompt to test rules against it…"
+    style="width:100%;box-sizing:border-box;height:200px;resize:vertical;
+    background:var(--bg-input);border:1px solid var(--border);border-radius:6px;
+    color:var(--text-1);font-family:inherit;font-size:13px;padding:10px 12px;
+    line-height:1.6;outline:none"
+    onkeydown="if(event.metaKey&&event.key==='Enter')runScan()"></textarea>
+  <div style="display:flex;justify-content:flex-end;margin-top:10px;gap:8px">
+    <button onclick="clearTester()" style="background:transparent;border:1px solid var(--border);
+      color:var(--text-3);border-radius:6px;padding:6px 18px;font-size:13px;cursor:pointer">Clear</button>
+    <button onclick="runScan()" id="scan-btn" style="background:#3b82f6;border:none;
+      color:#fff;border-radius:6px;padding:6px 22px;font-size:13px;cursor:pointer;font-weight:500">Scan</button>
+  </div>
+  <div id="tester-results" style="margin-top:18px;display:none">
+    <div style="border-top:1px solid var(--border);padding-top:14px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="font-size:12px;font-weight:600;color:var(--text-2)">Result:</span>
+        <span id="tester-status-badge" style="font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:4px"></span>
+      </div>
+      <div id="tester-matches" style="display:none;margin-bottom:12px"></div>
+      <div id="tester-redacted-wrap" style="display:none">
+        <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">Redacted output:</div>
+        <pre id="tester-redacted-text" style="background:var(--bg-raised);border:1px solid var(--border);
+          border-radius:6px;padding:10px 12px;font-size:12px;color:var(--text-2);
+          white-space:pre-wrap;word-break:break-all;margin:0;max-height:220px;overflow:auto"></pre>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1374,6 +1471,82 @@ setInterval(refresh, 3000);
 function toggleExport() {
   var p = document.getElementById('export-panel');
   p.style.display = p.style.display === 'none' ? 'block' : 'none';
+  if (p.style.display === 'block') document.getElementById('tester-panel').style.display = 'none';
+}
+
+function toggleTester() {
+  var p = document.getElementById('tester-panel');
+  var b = document.getElementById('tester-backdrop');
+  var open = p.style.display !== 'block';
+  p.style.display = open ? 'block' : 'none';
+  b.style.display = open ? 'block' : 'none';
+  if (open) {
+    document.getElementById('export-panel').style.display = 'none';
+    document.getElementById('tester-input').focus();
+  }
+}
+
+function clearTester() {
+  document.getElementById('tester-input').value = '';
+  document.getElementById('tester-results').style.display = 'none';
+  document.getElementById('tester-input').focus();
+}
+
+async function runScan() {
+  var text = document.getElementById('tester-input').value.trim();
+  if (!text) return;
+  var btn = document.getElementById('scan-btn');
+  btn.textContent = 'Scanning…'; btn.disabled = true;
+  try {
+    var res = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text: text})});
+    var data = await res.json();
+    renderScanResult(data);
+  } catch(e) {
+    alert('Scan failed: ' + e);
+  } finally {
+    btn.textContent = 'Scan'; btn.disabled = false;
+  }
+}
+
+function renderScanResult(data) {
+  var results = document.getElementById('tester-results');
+  results.style.display = 'block';
+  var badge = document.getElementById('tester-status-badge');
+  var colors = {blocked:'#e05252', redacted:'#c49a2a', clean:'#3fa66e'};
+  badge.textContent = data.status.toUpperCase();
+  badge.style.background = colors[data.status] || '#888';
+  badge.style.color = '#fff';
+
+  var matchesEl = document.getElementById('tester-matches');
+  if (data.matches && data.matches.length > 0) {
+    matchesEl.style.display = 'block';
+    matchesEl.innerHTML = data.matches.map(function(m) {
+      var sevColor = m.severity === 'high' ? '#e05252' : m.severity === 'medium' ? '#c49a2a' : '#3fa66e';
+      var modeColor = m.mode === 'block' ? '#e05252' : '#3fa66e';
+      return '<div style="background:var(--bg-raised);border:1px solid var(--border);border-radius:6px;padding:7px 10px;margin-bottom:5px;font-size:11px">' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
+        '<span style="font-weight:600;color:var(--text-1)">' + escHtml(m.rule_name) + '</span>' +
+        '<span style="background:' + sevColor + ';color:#fff;border-radius:3px;padding:1px 6px;font-size:10px">' + m.severity + '</span>' +
+        '<span style="background:' + modeColor + ';color:#fff;border-radius:3px;padding:1px 6px;font-size:10px">' + m.mode + '</span>' +
+        '</div>' +
+        '<div style="color:var(--text-3);font-family:monospace;font-size:10.5px;word-break:break-all">' + escHtml(m.snippet) + '</div>' +
+        '</div>';
+    }).join('');
+  } else {
+    matchesEl.style.display = 'none';
+  }
+
+  var redactWrap = document.getElementById('tester-redacted-wrap');
+  if (data.status === 'redacted' && data.redacted !== data.original) {
+    redactWrap.style.display = 'block';
+    document.getElementById('tester-redacted-text').textContent = data.redacted;
+  } else {
+    redactWrap.style.display = 'none';
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function doExport(preset) {
