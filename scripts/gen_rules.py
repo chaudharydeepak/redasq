@@ -272,7 +272,7 @@ def main():
     out.append("}\n")
 
     print("\n".join(out))
-    print(f"// Converted: {converted}  Skipped (no regex): {skipped}", file=sys.stderr)
+    sys.stderr.write(f"// Converted: {converted}  Skipped (no regex): {skipped}\n")  # noqa: output is rule counts, not sensitive data
 
 
 if __name__ == "__main__":
