@@ -271,7 +271,7 @@ def main():
 
     out.append("}\n")
 
-    print("\n".join(out))
+    print("\n".join(out))  # lgtm[py/clear-text-logging-sensitive-data] intentional: outputs generated Go source, not credentials
     sys.stderr.write(f"// Converted: {converted}  Skipped (no regex): {skipped}\n")  # noqa: output is rule counts, not sensitive data
 
 
