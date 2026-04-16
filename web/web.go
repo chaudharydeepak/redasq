@@ -995,13 +995,13 @@ var dashboardHTML = `<!DOCTYPE html>
 
   <!-- Model latency row (collapsible) -->
   <div id="model-latency-row" style="display:none;margin-bottom:18px">
-    <div id="latency-panel" style="background:var(--surface);border:1px solid var(--border);border-left:3px solid #4f8ef7;border-radius:6px;overflow:hidden">
+    <div id="latency-panel" style="background:var(--surface);border:1px solid var(--border);border-left:3px solid #4f8ef7;border-radius:6px">
       <button id="latency-toggle" onclick="toggleLatencyPanel()" aria-expanded="false" aria-controls="latency-table-wrap" style="width:100%;display:flex;align-items:center;gap:8px;padding:9px 14px;background:transparent;border:none;cursor:pointer;text-align:left;color:var(--text-2);font-size:12px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;user-select:none">
-        <span id="latency-chevron" style="display:inline-block;font-size:10px;transition:transform 0.18s ease;transform:rotate(0deg);color:var(--text-3);line-height:1">&#9654;</span>
+        <span id="latency-chevron" style="display:inline-block;font-size:10px;transition:transform 0.15s ease-out;transform:rotate(0deg);color:var(--text-3);line-height:1">&#9654;</span>
         <span>Model Latency</span>
         <span id="latency-summary" style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-3);letter-spacing:0;text-transform:none"></span>
       </button>
-      <div id="latency-table-wrap" style="max-height:0;overflow:hidden;transition:max-height 0.22s ease">
+      <div id="latency-table-wrap" style="height:0;overflow:hidden">
         <div style="border-top:1px solid var(--border);padding:0 4px 6px">
           <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:12px">
             <thead>
@@ -1501,7 +1501,7 @@ async function refreshModelStats() {
     var wrap = document.getElementById('latency-table-wrap');
     var btn = document.getElementById('latency-toggle');
     if (wrap && btn && btn.getAttribute('aria-expanded') === 'true') {
-      wrap.style.maxHeight = wrap.scrollHeight + 'px';
+      wrap.style.height = 'auto';
     }
   } catch(e) {}
 }
@@ -1512,16 +1512,32 @@ function toggleLatencyPanel() {
   var btn = document.getElementById('latency-toggle');
   var isOpen = btn.getAttribute('aria-expanded') === 'true';
   if (isOpen) {
-    wrap.style.maxHeight = '0px';
+    _animateHeight(wrap, wrap.offsetHeight, 0, 160, function() { wrap.style.overflow = 'hidden'; });
     chevron.style.transform = 'rotate(0deg)';
     btn.setAttribute('aria-expanded', 'false');
     try { localStorage.setItem('latencyPanelOpen', '0'); } catch(e) {}
   } else {
-    wrap.style.maxHeight = wrap.scrollHeight + 'px';
+    wrap.style.overflow = 'hidden';
+    _animateHeight(wrap, 0, wrap.scrollHeight, 160, function() { wrap.style.height = 'auto'; });
     chevron.style.transform = 'rotate(90deg)';
     btn.setAttribute('aria-expanded', 'true');
     try { localStorage.setItem('latencyPanelOpen', '1'); } catch(e) {}
   }
+}
+
+// Smooth height animation using requestAnimationFrame (ease-out cubic).
+// Avoids max-height layout jank and subpixel border clipping from overflow:hidden on parent.
+function _animateHeight(el, from, to, durationMs, onDone) {
+  var start = null;
+  el.style.height = from + 'px';
+  function step(ts) {
+    if (!start) start = ts;
+    var t = Math.min((ts - start) / durationMs, 1);
+    var ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
+    el.style.height = (from + (to - from) * ease) + 'px';
+    if (t < 1) { requestAnimationFrame(step); } else { if (onDone) onDone(); }
+  }
+  requestAnimationFrame(step);
 }
 
 function restoreLatencyPanel() {
@@ -1531,7 +1547,8 @@ function restoreLatencyPanel() {
       var chevron = document.getElementById('latency-chevron');
       var btn = document.getElementById('latency-toggle');
       if (wrap) {
-        wrap.style.maxHeight = wrap.scrollHeight + 'px';
+        wrap.style.height = 'auto';
+        wrap.style.overflow = '';
         chevron.style.transform = 'rotate(90deg)';
         btn.setAttribute('aria-expanded', 'true');
       }
