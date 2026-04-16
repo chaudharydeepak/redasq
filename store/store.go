@@ -251,61 +251,63 @@ func (s *Store) Stats() Stats {
 	return st
 }
 
-// ModelStat holds latency percentiles for a single model.
+// ModelStat holds latency percentiles for a single client+model combination.
 type ModelStat struct {
-	Model  string  `json:"model"`
-	P50MS  int64   `json:"p50_ms"`
-	P95MS  int64   `json:"p95_ms"`
-	Sample int     `json:"sample"`
+	Client string `json:"client"`
+	Model  string `json:"model"`
+	P50MS  int64  `json:"p50_ms"`
+	P95MS  int64  `json:"p95_ms"`
+	P99MS  int64  `json:"p99_ms"`
+	Sample int    `json:"sample"`
 }
 
-// ModelStats returns p50/p95 TTFB per model from the last 50 completed requests each.
+// ModelStats returns p50/p95/p99 TTFB per client+model from the last 50 completed requests each.
 func (s *Store) ModelStats() ([]ModelStat, error) {
 	rows, err := s.db.Query(`
-		SELECT model, duration_ms
+		SELECT client, model, duration_ms
 		FROM (
-			SELECT model, duration_ms,
-			       ROW_NUMBER() OVER (PARTITION BY model ORDER BY timestamp DESC) AS rn
+			SELECT client, model, duration_ms,
+			       ROW_NUMBER() OVER (PARTITION BY client, model ORDER BY timestamp DESC) AS rn
 			FROM prompts
 			WHERE model != '' AND duration_ms > 0
 		)
 		WHERE rn <= 50
-		ORDER BY model, duration_ms
+		ORDER BY client, model, duration_ms
 	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	// Group durations by model (already sorted ascending per model within the window).
-	type group struct {
-		durations []int64
-	}
-	groups := map[string]*group{}
-	var order []string
+	type groupKey struct{ client, model string }
+	type group struct{ durations []int64 }
+	groups := map[groupKey]*group{}
+	var order []groupKey
 	for rows.Next() {
-		var model string
+		var client, model string
 		var ms int64
-		if err := rows.Scan(&model, &ms); err != nil {
+		if err := rows.Scan(&client, &model, &ms); err != nil {
 			return nil, err
 		}
-		if _, ok := groups[model]; !ok {
-			groups[model] = &group{}
-			order = append(order, model)
+		k := groupKey{client, model}
+		if _, ok := groups[k]; !ok {
+			groups[k] = &group{}
+			order = append(order, k)
 		}
-		groups[model].durations = append(groups[model].durations, ms)
+		groups[k].durations = append(groups[k].durations, ms)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
 	out := make([]ModelStat, 0, len(order))
-	for _, model := range order {
-		d := groups[model].durations
+	for _, k := range order {
+		d := groups[k].durations
 		n := len(d)
 		p50 := d[int(float64(n)*0.50)]
 		p95 := d[min(int(float64(n)*0.95), n-1)]
-		out = append(out, ModelStat{Model: model, P50MS: p50, P95MS: p95, Sample: n})
+		p99 := d[min(int(float64(n)*0.99), n-1)]
+		out = append(out, ModelStat{Client: k.client, Model: k.model, P50MS: p50, P95MS: p95, P99MS: p99, Sample: n})
 	}
 	return out, nil
 }

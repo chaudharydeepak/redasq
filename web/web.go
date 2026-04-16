@@ -1002,18 +1002,16 @@ var dashboardHTML = `<!DOCTYPE html>
         <span id="latency-summary" style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-3);letter-spacing:0;text-transform:none"></span>
       </button>
       <div id="latency-table-wrap" style="height:0;overflow:hidden">
-        <div style="border-top:1px solid var(--border);padding:0 4px 6px">
-          <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:12px">
-            <thead>
-              <tr style="color:var(--text-3);text-align:left">
-                <th style="padding:7px 10px;font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase">Model</th>
-                <th style="padding:7px 10px;font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;text-align:right">p50</th>
-                <th style="padding:7px 10px;font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;text-align:right">p95</th>
-                <th style="padding:7px 10px;font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;text-align:right">Requests</th>
-              </tr>
-            </thead>
+        <div style="border-top:1px solid var(--border);padding:0 4px 3px">
+          <div style="max-height:160px;overflow-y:auto">
+          <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead id="model-latency-head" style="position:sticky;top:0;background:var(--bg-surface);z-index:1"></thead>
             <tbody id="model-latency-body"></tbody>
           </table>
+          </div>
+        </div>
+          </table>
+          </div>
         </div>
       </div>
     </div>
@@ -1481,28 +1479,61 @@ async function refreshModelStats() {
   try {
     var stats = await fetch('/api/model-stats').then(function(r){ return r.json(); });
     var row = document.getElementById('model-latency-row');
+    var thead = document.getElementById('model-latency-head');
     var tbody = document.getElementById('model-latency-body');
     var summary = document.getElementById('latency-summary');
     if (!stats || stats.length === 0) { row.style.display = 'none'; return; }
     row.style.display = 'block';
-    if (summary) summary.textContent = stats.length + (stats.length === 1 ? ' model' : ' models');
-    tbody.innerHTML = stats.map(function(s) {
-      var p50 = s.p50_ms >= 1000 ? (s.p50_ms/1000).toFixed(1)+'s' : s.p50_ms+'ms';
-      var p95 = s.p95_ms >= 1000 ? (s.p95_ms/1000).toFixed(1)+'s' : s.p95_ms+'ms';
-      var p95Color = s.p95_ms > 10000 ? 'var(--danger)' : s.p95_ms > 5000 ? 'var(--warning)' : '#4caf82';
-      return '<tr>' +
-        '<td style="padding:6px 10px;color:var(--text-2);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(s.model)+'">'+esc(s.model)+'</td>' +
-        '<td style="padding:6px 10px;text-align:right;font-family:monospace;font-variant-numeric:tabular-nums;color:var(--text-1);font-weight:600">'+p50+'</td>' +
-        '<td style="padding:6px 10px;text-align:right;font-family:monospace;font-variant-numeric:tabular-nums;font-weight:600;color:'+p95Color+'">'+p95+'</td>' +
-        '<td style="padding:6px 10px;text-align:right;color:var(--text-3);font-variant-numeric:tabular-nums">'+s.sample+' <span style="font-size:10px">/ 50</span></td>' +
-      '</tr>';
+
+    // Collect unique clients and models (sorted).
+    var clientSet = {}, modelSet = {};
+    stats.forEach(function(s) { clientSet[s.client||''] = 1; modelSet[s.model] = 1; });
+    var clients = Object.keys(clientSet).sort();
+    var models  = Object.keys(modelSet).sort();
+    if (summary) summary.textContent = models.length + ' model' + (models.length === 1 ? '' : 's');
+
+    // Build lookup: model+client → stat.
+    var lookup = {};
+    stats.forEach(function(s) { lookup[s.model + '\0' + (s.client||'')] = s; });
+
+    var fmt = function(ms) { return ms >= 1000 ? (ms/1000).toFixed(1)+'s' : ms+'ms'; };
+    var col  = function(ms) { return ms > 10000 ? 'var(--danger)' : ms > 5000 ? 'var(--warning)' : '#4caf82'; };
+    var thStyle = 'padding:4px 10px;font-weight:600;font-size:10px;letter-spacing:0.04em;text-transform:uppercase;color:var(--text-3)';
+
+    // Build header dynamically.
+    var hdr = '<tr><th style="'+thStyle+'">Model</th>';
+    clients.forEach(function(c) {
+      hdr += '<th style="'+thStyle+';text-align:right">'+esc(c||'unknown')+'</th>';
+    });
+    hdr += '<th style="'+thStyle+';text-align:right">n</th></tr>';
+    thead.innerHTML = hdr;
+
+    // One row per model.
+    tbody.innerHTML = models.map(function(m) {
+      var cells = '<td style="padding:3px 10px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px" title="'+esc(m)+'">'+esc(m)+'</td>';
+      var totalN = 0;
+      clients.forEach(function(c) {
+        var s = lookup[m + '\0' + c];
+        if (s) {
+          totalN += s.sample;
+          cells += '<td style="padding:3px 10px;text-align:right;white-space:nowrap;font-family:monospace;font-size:11px">' +
+            '<span style="color:var(--text-1);font-weight:600">'+fmt(s.p50_ms)+'</span>' +
+            '<span style="color:var(--text-3)"> / </span>' +
+            '<span style="color:'+col(s.p95_ms)+';font-weight:600">'+fmt(s.p95_ms)+'</span>' +
+            '<span style="color:var(--text-3);font-size:9px"> ('+s.sample+')</span>' +
+          '</td>';
+        } else {
+          cells += '<td style="padding:3px 10px;text-align:right;color:var(--text-3)">—</td>';
+        }
+      });
+      cells += '<td style="padding:3px 10px;text-align:right;color:var(--text-3);font-variant-numeric:tabular-nums">'+totalN+'</td>';
+      return '<tr>'+cells+'</tr>';
     }).join('');
-    // Re-fit height if panel is currently open.
+
+    // Re-fit height if panel open.
     var wrap = document.getElementById('latency-table-wrap');
-    var btn = document.getElementById('latency-toggle');
-    if (wrap && btn && btn.getAttribute('aria-expanded') === 'true') {
-      wrap.style.height = 'auto';
-    }
+    var btn  = document.getElementById('latency-toggle');
+    if (wrap && btn && btn.getAttribute('aria-expanded') === 'true') wrap.style.height = 'auto';
   } catch(e) {}
 }
 
