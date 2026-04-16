@@ -1,0 +1,1627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prompt Guard — Stop AI Tools From Leaking Your Secrets</title>
+  <meta name="description" content="Prompt Guard is an open-source HTTPS proxy that intercepts every prompt sent to AI coding assistants and blocks or redacts credentials, PII, and sensitive data before it leaves your machine." />
+  <meta property="og:title" content="Prompt Guard — Stop AI Tools From Leaking Your Secrets" />
+  <meta property="og:description" content="230 detection rules. Block or redact. Full audit log. Single binary. No cloud." />
+  <meta property="og:url" content="https://chaudharydeepak.github.io/prompt-guard/" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ─── Reset & Base ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-base:     #0d1117;
+      --bg-surface:  #161b22;
+      --bg-raised:   #1c2333;
+      --bg-card:     #1a2132;
+      --border:      #30363d;
+      --border-sub:  #21262d;
+      --text-1:      #f0f6fc;
+      --text-2:      #8b949e;
+      --text-3:      #6e7681;
+      --accent:      #3b82f6;
+      --accent-dim:  rgba(59, 130, 246, 0.12);
+      --accent-glow: rgba(59, 130, 246, 0.25);
+      --cyan:        #06b6d4;
+      --cyan-dim:    rgba(6, 182, 212, 0.12);
+      --danger:      #ef4444;
+      --success:     #10b981;
+      --warning:     #f59e0b;
+      --purple:      #a78bfa;
+      --mono:        'SF Mono', 'Fira Code', 'Fira Mono', 'Cascadia Code', monospace;
+      --radius-sm:   6px;
+      --radius-md:   10px;
+      --radius-lg:   16px;
+      --shadow-card: 0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3);
+      --shadow-glow: 0 0 0 1px var(--accent), 0 0 24px var(--accent-glow);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background-color: var(--bg-base);
+      color: var(--text-1);
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ─── Layout ─── */
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    section { padding: 96px 0; }
+
+    /* ─── Nav ─── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(13, 17, 23, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-sub);
+    }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--text-1);
+      text-decoration: none;
+    }
+
+    .nav-logo-icon {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent), var(--cyan));
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .nav-link {
+      color: var(--text-2);
+      font-size: 14px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      transition: color 0.15s, background 0.15s;
+      text-decoration: none;
+    }
+
+    .nav-link:hover {
+      color: var(--text-1);
+      background: var(--bg-surface);
+      text-decoration: none;
+    }
+
+    .btn-nav-github {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text-1);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      text-decoration: none;
+    }
+
+    .btn-nav-github:hover {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+      text-decoration: none;
+    }
+
+    /* ─── Hero ─── */
+    #hero {
+      padding: 120px 0 96px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-grid-bg {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(59,130,246,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(59,130,246,0.04) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, black 40%, transparent 100%);
+      -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, black 40%, transparent 100%);
+    }
+
+    .hero-glow {
+      position: absolute;
+      top: -200px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 600px;
+      background: radial-gradient(ellipse at center, rgba(59,130,246,0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-content {
+      position: relative;
+      text-align: center;
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(59,130,246,0.3);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 5px 12px;
+      border-radius: 100px;
+      margin-bottom: 28px;
+    }
+
+    .hero-badge-dot {
+      width: 6px;
+      height: 6px;
+      background: var(--accent);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    h1 {
+      font-size: clamp(36px, 6vw, 62px);
+      font-weight: 700;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+      color: var(--text-1);
+      margin-bottom: 22px;
+    }
+
+    h1 em {
+      font-style: normal;
+      background: linear-gradient(135deg, var(--accent), var(--cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      font-size: 18px;
+      color: var(--text-2);
+      line-height: 1.65;
+      max-width: 600px;
+      margin: 0 auto 40px;
+    }
+
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 52px;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 12px 24px;
+      border-radius: var(--radius-sm);
+      transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+      text-decoration: none;
+      box-shadow: 0 0 0 0 var(--accent-glow);
+    }
+
+    .btn-primary:hover {
+      background: #2563eb;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px var(--accent-glow);
+      text-decoration: none;
+      color: #fff;
+    }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-2);
+      font-size: 15px;
+      font-weight: 500;
+      padding: 12px 24px;
+      border-radius: var(--radius-sm);
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+      text-decoration: none;
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--text-2);
+      color: var(--text-1);
+      background: var(--bg-surface);
+      text-decoration: none;
+    }
+
+    /* Terminal block */
+    .terminal {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      max-width: 600px;
+      margin: 0 auto;
+      text-align: left;
+      box-shadow: var(--shadow-card);
+    }
+
+    .terminal-bar {
+      background: var(--bg-raised);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot.red    { background: #ff5f57; }
+    .terminal-dot.yellow { background: #febc2e; }
+    .terminal-dot.green  { background: #28c840; }
+
+    .terminal-title {
+      margin-left: 8px;
+      font-size: 12px;
+      color: var(--text-3);
+      font-family: var(--mono);
+    }
+
+    .terminal-body {
+      padding: 20px 22px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--text-2);
+    }
+
+    .terminal-body .prompt { color: var(--success); user-select: none; }
+    .terminal-body .cmd   { color: var(--text-1); }
+    .terminal-body .comment { color: var(--text-3); }
+
+    /* ─── Section titles ─── */
+    .section-label {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 14px;
+    }
+
+    h2 {
+      font-size: clamp(26px, 4vw, 40px);
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      line-height: 1.2;
+      color: var(--text-1);
+      margin-bottom: 16px;
+    }
+
+    .section-intro {
+      font-size: 16px;
+      color: var(--text-2);
+      max-width: 560px;
+    }
+
+    .section-header {
+      margin-bottom: 56px;
+    }
+
+    .section-header.center {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ─── Problem cards ─── */
+    #problem { background: var(--bg-base); }
+
+    .problem-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 20px;
+    }
+
+    .problem-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 28px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .problem-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--danger), #f97316);
+    }
+
+    .problem-card:hover {
+      border-color: rgba(239, 68, 68, 0.4);
+      transform: translateY(-2px);
+    }
+
+    .problem-icon {
+      width: 40px;
+      height: 40px;
+      background: rgba(239,68,68,0.12);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 18px;
+    }
+
+    .problem-card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-1);
+      margin-bottom: 10px;
+    }
+
+    .problem-card p {
+      font-size: 14px;
+      color: var(--text-2);
+      line-height: 1.65;
+    }
+
+    .problem-card .stat {
+      display: inline-block;
+      margin-top: 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--danger);
+      background: rgba(239,68,68,0.1);
+      padding: 4px 10px;
+      border-radius: 100px;
+    }
+
+    /* ─── How it works ─── */
+    #how-it-works {
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-sub);
+      border-bottom: 1px solid var(--border-sub);
+    }
+
+    .flow-steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+      position: relative;
+    }
+
+    .flow-steps::before {
+      content: '';
+      position: absolute;
+      top: 30px;
+      left: calc(12.5% + 20px);
+      right: calc(12.5% + 20px);
+      height: 1px;
+      background: linear-gradient(90deg, var(--accent), var(--cyan));
+      opacity: 0.4;
+    }
+
+    .flow-step {
+      text-align: center;
+      padding: 0 16px;
+      position: relative;
+    }
+
+    .flow-step-num {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      position: relative;
+      z-index: 1;
+    }
+
+    .flow-step:nth-child(1) .flow-step-num { background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.4); color: var(--accent); }
+    .flow-step:nth-child(2) .flow-step-num { background: rgba(6,182,212,0.15);  border: 1px solid rgba(6,182,212,0.4);  color: var(--cyan); }
+    .flow-step:nth-child(3) .flow-step-num { background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.35); color: var(--danger); }
+    .flow-step:nth-child(4) .flow-step-num { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.35); color: var(--success); }
+
+    .flow-step h3 {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-1);
+      margin-bottom: 10px;
+    }
+
+    .flow-step p {
+      font-size: 13.5px;
+      color: var(--text-2);
+      line-height: 1.6;
+    }
+
+    /* ─── Architecture diagram ─── */
+    .arch-diagram {
+      margin-top: 56px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 32px;
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-2);
+      overflow-x: auto;
+    }
+
+    .arch-diagram pre {
+      line-height: 1.8;
+      white-space: pre;
+    }
+
+    .arch-blue   { color: var(--accent); }
+    .arch-cyan   { color: var(--cyan); }
+    .arch-red    { color: var(--danger); }
+    .arch-green  { color: var(--success); }
+    .arch-purple { color: var(--purple); }
+
+    /* ─── Features grid ─── */
+    #features { background: var(--bg-base); }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      gap: 20px;
+    }
+
+    .feature-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 28px;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--accent);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .feature-card:hover {
+      border-color: rgba(59,130,246,0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 0 1px rgba(59,130,246,0.1);
+    }
+
+    .feature-card:hover::before { opacity: 1; }
+
+    .feature-icon {
+      width: 44px;
+      height: 44px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(59,130,246,0.2);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 18px;
+    }
+
+    .feature-card h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-1);
+      margin-bottom: 10px;
+    }
+
+    .feature-card p {
+      font-size: 14px;
+      color: var(--text-2);
+      line-height: 1.65;
+    }
+
+    /* ─── Stats strip ─── */
+    .stats-strip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      flex-wrap: wrap;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-sub);
+      border-bottom: 1px solid var(--border-sub);
+      padding: 0;
+    }
+
+    .stat-item {
+      flex: 1;
+      min-width: 180px;
+      text-align: center;
+      padding: 36px 24px;
+      border-right: 1px solid var(--border-sub);
+    }
+
+    .stat-item:last-child { border-right: none; }
+
+    .stat-value {
+      font-size: 40px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      color: var(--text-1);
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .stat-value span { color: var(--accent); }
+
+    .stat-label {
+      font-size: 13px;
+      color: var(--text-2);
+    }
+
+    /* ─── Quick Start ─── */
+    #quickstart {
+      background: var(--bg-base);
+    }
+
+    .steps-list {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .step-item {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(59,130,246,0.35);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-top: 2px;
+    }
+
+    .step-content { flex: 1; }
+
+    .step-content h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-1);
+      margin-bottom: 12px;
+    }
+
+    .step-content p {
+      font-size: 14px;
+      color: var(--text-2);
+      margin-bottom: 14px;
+    }
+
+    .code-block {
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 16px 18px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--text-2);
+      line-height: 1.75;
+      overflow-x: auto;
+      position: relative;
+    }
+
+    .code-block .kw  { color: var(--accent); }
+    .code-block .val { color: var(--cyan); }
+    .code-block .cmt { color: var(--text-3); }
+    .code-block .hl  { color: var(--text-1); }
+
+    .copy-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 5px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-2);
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .copy-btn:hover {
+      color: var(--text-1);
+      border-color: var(--text-2);
+    }
+
+    .copy-btn.copied {
+      color: var(--success);
+      border-color: var(--success);
+    }
+
+    /* ─── Dashboard preview mockup ─── */
+    .dashboard-mockup {
+      margin-top: 64px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+    }
+
+    .mockup-header {
+      background: var(--bg-raised);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .mockup-dots { display: flex; gap: 6px; }
+    .mockup-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .mockup-dot.r { background: #ff5f57; }
+    .mockup-dot.y { background: #febc2e; }
+    .mockup-dot.g { background: #28c840; }
+
+    .mockup-url {
+      flex: 1;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-3);
+    }
+
+    .mockup-body {
+      padding: 20px;
+    }
+
+    .mockup-tiles {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr) 0.85fr 1.2fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .mockup-tile {
+      background: var(--bg-card);
+      border: 1px solid var(--border-sub);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .mockup-tile::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+    }
+
+    .mockup-tile.blue::before  { background: var(--accent); }
+    .mockup-tile.cyan::before  { background: var(--cyan); }
+    .mockup-tile.red::before   { background: var(--danger); }
+    .mockup-tile.amber::before { background: var(--warning); }
+    .mockup-tile.green::before { background: var(--success); }
+
+    .tile-val {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-1);
+      letter-spacing: -0.03em;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .tile-val.red   { color: var(--danger); }
+    .tile-val.amber { color: var(--warning); }
+    .tile-val.cyan  { color: var(--cyan); }
+
+    .tile-lbl {
+      font-size: 10px;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .mockup-table-head {
+      display: grid;
+      grid-template-columns: 110px 1fr 100px 90px 90px;
+      padding: 8px 12px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--border-sub);
+    }
+
+    .mockup-row {
+      display: grid;
+      grid-template-columns: 110px 1fr 100px 90px 90px;
+      padding: 11px 12px;
+      font-size: 12px;
+      color: var(--text-2);
+      border-bottom: 1px solid var(--border-sub);
+      align-items: center;
+      transition: background 0.1s;
+    }
+
+    .mockup-row:hover { background: var(--bg-raised); }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 100px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .chip.blocked  { background: rgba(239,68,68,0.15);  color: var(--danger); }
+    .chip.clean    { background: rgba(16,185,129,0.12); color: var(--success); }
+    .chip.redacted { background: rgba(167,139,250,0.15); color: var(--purple); }
+
+    .rule-chip {
+      display: inline-flex;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-family: var(--mono);
+      background: rgba(59,130,246,0.1);
+      color: var(--accent);
+      margin-right: 3px;
+    }
+
+    .mono-sm {
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    /* ─── CTA section ─── */
+    #cta {
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-sub);
+      padding: 96px 0;
+      text-align: center;
+    }
+
+    .cta-box {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .cta-box h2 { margin-bottom: 16px; }
+    .cta-box p  { color: var(--text-2); font-size: 16px; margin-bottom: 36px; }
+
+    /* ─── Footer ─── */
+    footer {
+      background: var(--bg-base);
+      border-top: 1px solid var(--border-sub);
+      padding: 40px 0;
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .footer-left-icon {
+      width: 24px;
+      height: 24px;
+      background: linear-gradient(135deg, var(--accent), var(--cyan));
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .footer-text {
+      font-size: 13px;
+      color: var(--text-3);
+    }
+
+    .footer-text a { color: var(--text-2); }
+    .footer-text a:hover { color: var(--text-1); }
+
+    .footer-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .footer-links a {
+      font-size: 13px;
+      color: var(--text-3);
+    }
+
+    .footer-links a:hover { color: var(--text-1); }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 768px) {
+      section { padding: 64px 0; }
+      #hero { padding: 80px 0 64px; }
+
+      .flow-steps {
+        grid-template-columns: 1fr 1fr;
+        gap: 32px;
+      }
+
+      .flow-steps::before { display: none; }
+
+      .mockup-tiles {
+        grid-template-columns: repeat(3, 1fr);
+      }
+
+      .mockup-table-head,
+      .mockup-row {
+        grid-template-columns: 80px 1fr 80px;
+        font-size: 11px;
+      }
+
+      .mockup-table-head > *:nth-child(4),
+      .mockup-table-head > *:nth-child(5),
+      .mockup-row > *:nth-child(4),
+      .mockup-row > *:nth-child(5) {
+        display: none;
+      }
+
+      .stat-item { border-right: none; border-bottom: 1px solid var(--border-sub); }
+      .stat-item:last-child { border-bottom: none; }
+
+      nav .nav-links { display: none; }
+
+      .footer-inner { flex-direction: column; align-items: flex-start; gap: 16px; }
+    }
+
+    @media (max-width: 520px) {
+      .flow-steps {
+        grid-template-columns: 1fr;
+      }
+
+      .mockup-tiles {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      h1 { font-size: 32px; }
+
+      .hero-sub { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── Nav ─── -->
+  <nav>
+    <div class="container">
+      <div class="nav-inner">
+        <a class="nav-logo" href="#">
+          <div class="nav-logo-icon">
+            <!-- Shield icon -->
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M8 1L2 3.5v4c0 3.3 2.5 6.1 6 7 3.5-.9 6-3.7 6-7v-4L8 1z" fill="white" opacity="0.9"/>
+              <path d="M5.5 8l1.8 1.8L10.5 6.5" stroke="#0d1117" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          Prompt Guard
+        </a>
+        <div class="nav-links">
+          <a class="nav-link" href="#problem">Why</a>
+          <a class="nav-link" href="#how-it-works">How it works</a>
+          <a class="nav-link" href="#features">Features</a>
+          <a class="nav-link" href="#quickstart">Quick start</a>
+        </div>
+        <a class="btn-nav-github" href="https://github.com/chaudharydeepak/prompt-guard" target="_blank" rel="noopener">
+          <!-- GitHub icon -->
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ─── Hero ─── -->
+  <section id="hero">
+    <div class="hero-grid-bg"></div>
+    <div class="hero-glow"></div>
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-badge">
+          <div class="hero-badge-dot"></div>
+          Open source &middot; AGPL &middot; Single binary
+        </div>
+        <h1>Your AI assistant<br/>shouldn't see your <em>secrets.</em></h1>
+        <p class="hero-sub">
+          Prompt Guard intercepts every prompt before it reaches the AI API &mdash;
+          blocking credentials, PII, and sensitive data in real time.
+        </p>
+        <div class="hero-actions">
+          <a class="btn-primary" href="https://github.com/chaudharydeepak/prompt-guard" target="_blank" rel="noopener">
+            <!-- GitHub icon -->
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            View on GitHub
+          </a>
+          <a class="btn-secondary" href="#quickstart">
+            <!-- Terminal icon -->
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="1" y="2" width="14" height="12" rx="2"/>
+              <path d="M4 6l3 3-3 3M8 12h4"/>
+            </svg>
+            Quick start
+          </a>
+        </div>
+        <div class="terminal">
+          <div class="terminal-bar">
+            <div class="terminal-dot red"></div>
+            <div class="terminal-dot yellow"></div>
+            <div class="terminal-dot green"></div>
+            <span class="terminal-title">bash</span>
+          </div>
+          <div class="terminal-body">
+            <div><span class="prompt">$ </span><span class="cmd">git clone https://github.com/chaudharydeepak/prompt-guard</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">cd prompt-guard &amp;&amp; go build -o prompt-guard . &amp;&amp; ./prompt-guard</span></div>
+            <div style="margin-top:8px;"><span class="comment"># Proxy listening on :8080 &middot; Dashboard at http://localhost:7778</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Stats strip ─── -->
+  <div class="stats-strip">
+    <div class="stat-item">
+      <div class="stat-value">230<span>+</span></div>
+      <div class="stat-label">Detection rules</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">0</div>
+      <div class="stat-label">Cloud dependencies</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value"><span>1</span></div>
+      <div class="stat-label">Binary to deploy</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">6<span>+</span></div>
+      <div class="stat-label">AI tools supported</div>
+    </div>
+  </div>
+
+  <!-- ─── Problem ─── -->
+  <section id="problem">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-label">The problem</div>
+        <h2>AI tools are a data exfiltration risk</h2>
+        <p class="section-intro">
+          Every time you accept a suggestion or send a chat message, your editor context
+          travels to a third-party server. Most developers have no idea what's in that payload.
+        </p>
+      </div>
+      <div class="problem-grid">
+
+        <div class="problem-card">
+          <div class="problem-icon">
+            <!-- Eye icon -->
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#ef4444" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 10s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6z"/>
+              <circle cx="10" cy="10" r="2.5"/>
+            </svg>
+          </div>
+          <h3>AI tools see everything</h3>
+          <p>
+            Your editor context includes open files, unsaved buffers, git history,
+            and environment variables &mdash; all of it gets serialised into the prompt
+            and sent to third-party LLM servers.
+          </p>
+        </div>
+
+        <div class="problem-card">
+          <div class="problem-icon">
+            <!-- Alert icon -->
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#ef4444" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 2L2 17h16L10 2z"/>
+              <line x1="10" y1="9" x2="10" y2="13"/>
+              <line x1="10" y1="15.5" x2="10" y2="16"/>
+            </svg>
+          </div>
+          <h3>Secrets leak silently</h3>
+          <p>
+            GitGuardian 2026: 29 million secrets detected on public GitHub alone.
+            AI-assisted commits leak credentials at 2&times; the rate of human developers
+            &mdash; and you never get an error when it happens.
+          </p>
+          <span class="stat">2&times; higher leak rate with AI</span>
+        </div>
+
+        <div class="problem-card">
+          <div class="problem-icon">
+            <!-- X-circle / no-visibility icon -->
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#ef4444" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="10" cy="10" r="8"/>
+              <line x1="7" y1="7" x2="13" y2="13"/>
+              <line x1="13" y1="7" x2="7" y2="13"/>
+            </svg>
+          </div>
+          <h3>No visibility</h3>
+          <p>
+            Without a proxy layer, you have zero insight into what leaves your machine,
+            which rules would have triggered, or how much token budget is being consumed
+            across your team.
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── How it works ─── -->
+  <section id="how-it-works">
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">How it works</div>
+        <h2>Silent interception, zero friction</h2>
+        <p class="section-intro">
+          One environment variable routes all AI traffic through Prompt Guard.
+          Your tools behave exactly the same &mdash; minus the data you didn't mean to share.
+        </p>
+      </div>
+
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="flow-step-num">Connect</div>
+          <h3>Route</h3>
+          <p>
+            Set <code style="font-family:var(--mono);font-size:12px;color:var(--accent)">HTTPS_PROXY=localhost:8080</code>
+            &mdash; your AI client now routes through Prompt Guard automatically.
+          </p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num">Inspect</div>
+          <h3>Inspect</h3>
+          <p>
+            Prompt Guard decrypts each request and runs 230 detection rules across
+            the full prompt payload &mdash; gitleaks patterns plus hand-rolled PII rules.
+          </p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num">Act</div>
+          <h3>Block or Redact</h3>
+          <p>
+            Matched secrets are either <strong style="color:var(--danger)">blocked</strong>
+            (request rejected) or <strong style="color:var(--purple)">redacted</strong>
+            (<code style="font-family:var(--mono);font-size:12px">[REDACTED]</code> substituted) before forwarding.
+          </p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num">Audit</div>
+          <h3>Audit</h3>
+          <p>
+            Every request is logged to SQLite with matched rules, token usage,
+            latency, and model. Fully visible in the live dashboard.
+          </p>
+        </div>
+      </div>
+
+      <!-- ASCII-style architecture diagram -->
+      <div class="arch-diagram">
+<pre>
+  <span class="arch-blue">Claude Code</span>         <span class="arch-blue">GitHub Copilot</span>        <span class="arch-blue">VS Code / ChatGPT</span>
+       |                      |                          |
+       +──────────────────────+──────────────────────────+
+                              |
+                   <span class="arch-cyan">HTTPS_PROXY=localhost:8080</span>
+                              |
+                     ┌────────▼─────────┐
+                     │   <span class="arch-cyan">Prompt Guard</span>   │   &lt;── MITM TLS termination
+                     │                  │
+                     │  230 rules run   │   <span class="arch-red">▪ block</span>  ──▶  reject request
+                     │  on full payload │   <span class="arch-purple">▪ redact</span> ──▶  [REDACTED] + forward
+                     │                  │   <span class="arch-green">▪ clean</span>  ──▶  forward unchanged
+                     └────────┬─────────┘
+                              │
+                   <span class="arch-blue">SQLite audit log</span>  +  <span class="arch-cyan">localhost:7778 dashboard</span>
+                              │
+                     ┌────────▼─────────┐
+                     │   <span class="arch-green">AI API server</span>   │
+                     │  (receives only  │
+                     │  sanitised data) │
+                     └──────────────────┘
+</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Features ─── -->
+  <section id="features">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-label">Features</div>
+        <h2>Everything you need, nothing you don't</h2>
+        <p class="section-intro">
+          Built to stay out of the way until something important is about to leave your machine.
+        </p>
+      </div>
+
+      <div class="features-grid">
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <!-- Shield-check icon -->
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 2L3 5.5v5c0 4.4 3.3 8.1 8 9 4.7-0.9 8-4.6 8-9v-5L11 2z"/>
+              <polyline points="8 11 10.5 13.5 15 9"/>
+            </svg>
+          </div>
+          <h3>230 Detection Rules</h3>
+          <p>
+            Gitleaks patterns for API keys, tokens, and credentials &mdash; plus hand-rolled
+            rules for SSNs, credit card numbers, database connection strings, and bearer tokens.
+            Configurable per-rule.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <!-- Toggle icon -->
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="1" y="7" width="20" height="8" rx="4"/>
+              <circle cx="16" cy="11" r="3" fill="var(--accent)" stroke="none"/>
+              <line x1="5" y1="11" x2="8" y2="11"/>
+            </svg>
+          </div>
+          <h3>Block &amp; Redact Modes</h3>
+          <p>
+            <strong style="color:var(--danger)">Block</strong> stops the request entirely &mdash;
+            the AI never sees it. <strong style="color:var(--purple)">Redact</strong> scrubs the
+            matched value and forwards the sanitised prompt so your workflow continues uninterrupted.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <!-- Chart/dashboard icon -->
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="18" height="18" rx="3"/>
+              <line x1="7" y1="8" x2="7" y2="16"/>
+              <line x1="11" y1="11" x2="11" y2="16"/>
+              <line x1="15" y1="5" x2="15" y2="16"/>
+            </svg>
+          </div>
+          <h3>Live Dashboard</h3>
+          <p>
+            Real-time feed of intercepted prompts, matched rules, latency stats, token usage,
+            and model tracking &mdash; all at <code style="font-family:var(--mono);font-size:12px;color:var(--cyan)">localhost:7778</code>.
+            No external service required.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <!-- Robot/agent icon -->
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6" y="8" width="10" height="10" rx="2"/>
+              <circle cx="9" cy="13" r="1"/>
+              <circle cx="13" cy="13" r="1"/>
+              <line x1="11" y1="8" x2="11" y2="5"/>
+              <circle cx="11" cy="4" r="1.2"/>
+              <line x1="2" y1="12" x2="6" y2="12"/>
+              <line x1="16" y1="12" x2="20" y2="12"/>
+            </svg>
+          </div>
+          <h3>Agent Mode</h3>
+          <p>
+            Switch all rules to redact so long-running autonomous agents are never hard-blocked
+            mid-task. Secrets are still scrubbed, but the agent loop continues without interruption.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <!-- Grid/compat icon -->
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="7" height="7" rx="1.5"/>
+              <rect x="13" y="2" width="7" height="7" rx="1.5"/>
+              <rect x="2" y="13" width="7" height="7" rx="1.5"/>
+              <rect x="13" y="13" width="7" height="7" rx="1.5"/>
+            </svg>
+          </div>
+          <h3>Works Everywhere</h3>
+          <p>
+            Claude Code, GitHub Copilot (Pro / Business / Enterprise), VS Code, curl &mdash;
+            any <code style="font-family:var(--mono);font-size:12px;color:var(--cyan)">HTTP_PROXY</code>-aware tool works
+            without modification.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <!-- Binary/lock icon -->
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="5" y="10" width="12" height="9" rx="2"/>
+              <path d="M8 10V7a3 3 0 016 0v3"/>
+              <circle cx="11" cy="15" r="1.2" fill="var(--accent)" stroke="none"/>
+            </svg>
+          </div>
+          <h3>Single Binary, No Cloud</h3>
+          <p>
+            Go binary with zero runtime dependencies. SQLite audit log stays on disk.
+            Runs entirely on localhost &mdash; your prompts never touch a Prompt Guard server
+            because there isn't one.
+          </p>
+        </div>
+
+      </div>
+
+      <!-- Live dashboard mockup -->
+      <div class="dashboard-mockup">
+        <div class="mockup-header">
+          <div class="mockup-dots">
+            <div class="mockup-dot r"></div>
+            <div class="mockup-dot y"></div>
+            <div class="mockup-dot g"></div>
+          </div>
+          <div class="mockup-url">localhost:7778 &mdash; Prompt Guard Dashboard</div>
+        </div>
+        <div class="mockup-body">
+          <!-- Stat tiles -->
+          <div class="mockup-tiles">
+            <div class="mockup-tile blue">
+              <div class="tile-val">47</div>
+              <div class="tile-lbl">Total</div>
+            </div>
+            <div class="mockup-tile red">
+              <div class="tile-val red">3</div>
+              <div class="tile-lbl">Blocked</div>
+            </div>
+            <div class="mockup-tile amber">
+              <div class="tile-val amber">1</div>
+              <div class="tile-lbl">Flagged</div>
+            </div>
+            <div class="mockup-tile green">
+              <div class="tile-val">43</div>
+              <div class="tile-lbl">Clean</div>
+            </div>
+            <div class="mockup-tile cyan">
+              <div class="tile-val cyan">12</div>
+              <div class="tile-lbl">Redacted</div>
+            </div>
+            <div class="mockup-tile" style="border-top-color:var(--text-3);">
+              <div class="tile-val" style="font-size:15px;">214ms</div>
+              <div class="tile-lbl">Avg latency</div>
+            </div>
+            <div class="mockup-tile" style="border-top-color:var(--text-3);">
+              <div class="tile-val" style="font-size:15px;">84.2k</div>
+              <div class="tile-lbl">Tokens</div>
+            </div>
+          </div>
+          <!-- Table -->
+          <div class="mockup-table-head">
+            <div>Time</div>
+            <div>Prompt</div>
+            <div>Rules hit</div>
+            <div>Status</div>
+            <div>Model</div>
+          </div>
+          <div class="mockup-row">
+            <div class="mono-sm" style="color:var(--text-3)">14:32:01</div>
+            <div style="font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">Fix the auth middleware — here's my .env file...</div>
+            <div><span class="rule-chip">aws-key</span><span class="rule-chip">+2</span></div>
+            <div><span class="chip blocked">Blocked</span></div>
+            <div class="mono-sm" style="color:var(--text-3)">gpt-4o</div>
+          </div>
+          <div class="mockup-row">
+            <div class="mono-sm" style="color:var(--text-3)">14:31:45</div>
+            <div style="font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">Refactor the Stripe webhook handler to add retry logic</div>
+            <div><span class="rule-chip">stripe-key</span></div>
+            <div><span class="chip redacted">Redacted</span></div>
+            <div class="mono-sm" style="color:var(--text-3)">claude-3-5</div>
+          </div>
+          <div class="mockup-row">
+            <div class="mono-sm" style="color:var(--text-3)">14:31:12</div>
+            <div style="font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">Add unit tests for the user service</div>
+            <div style="color:var(--text-3);font-size:11px;">&mdash;</div>
+            <div><span class="chip clean">Clean</span></div>
+            <div class="mono-sm" style="color:var(--text-3)">claude-3-5</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ─── Quick Start ─── -->
+  <section id="quickstart" style="background:var(--bg-surface);border-top:1px solid var(--border-sub);border-bottom:1px solid var(--border-sub);">
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">Quick start</div>
+        <h2>Up and running in three steps</h2>
+        <p class="section-intro">
+          No Docker. No daemon. No config file required to start.
+        </p>
+      </div>
+
+      <div class="steps-list">
+
+        <div class="step-item">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <h3>Build &amp; run</h3>
+            <p>Clone the repo and build the Go binary. Prompt Guard starts immediately and listens on port 8080.</p>
+            <div class="code-block" style="position:relative;">
+              <button class="copy-btn" onclick="copyCode(this, 'step1')">Copy</button>
+              <div id="step1">
+<span class="hl">git clone</span> https://github.com/chaudharydeepak/prompt-guard
+<span class="hl">cd</span> prompt-guard
+<span class="hl">go build</span> -o prompt-guard .
+<span class="hl">./prompt-guard</span>
+
+<span class="cmt"># Proxy listening on  :8080</span>
+<span class="cmt"># Dashboard ready at  http://localhost:7778</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <h3>Set proxy environment variables</h3>
+            <p>
+              In a new terminal (or add to your shell profile), export the proxy variables.
+              For Claude Code, also set <code style="font-family:var(--mono);font-size:12px;color:var(--cyan)">NODE_EXTRA_CA_CERTS</code>
+              so the TLS certificate is trusted.
+            </p>
+            <div class="code-block" style="position:relative;">
+              <button class="copy-btn" onclick="copyCode(this, 'step2')">Copy</button>
+              <div id="step2">
+<span class="cmt"># Shell (bash / zsh)</span>
+<span class="kw">export</span> <span class="val">HTTP_PROXY</span>=http://localhost:8080
+<span class="kw">export</span> <span class="val">HTTPS_PROXY</span>=http://localhost:8080
+
+<span class="cmt"># Claude Code — trust the generated cert</span>
+<span class="kw">export</span> <span class="val">NODE_EXTRA_CA_CERTS</span>=~/.prompt-guard/ca.crt
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <h3>Open the dashboard</h3>
+            <p>
+              Open your browser and head to the dashboard. Every intercepted prompt
+              appears in real time. Adjust rules, switch to Agent Mode, or export the audit log.
+            </p>
+            <div class="code-block" style="position:relative;">
+              <button class="copy-btn" onclick="copyCode(this, 'step3')">Copy</button>
+              <div id="step3">
+<span class="cmt"># macOS</span>
+<span class="hl">open</span> http://localhost:7778
+
+<span class="cmt"># Linux</span>
+<span class="hl">xdg-open</span> http://localhost:7778
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── CTA ─── -->
+  <section id="cta">
+    <div class="container">
+      <div class="cta-box">
+        <div class="section-label">Open source</div>
+        <h2>Stop guessing what your AI tool is sending.</h2>
+        <p>
+          Prompt Guard gives you a clear audit trail and hard guarantees that your
+          credentials never reach a third-party LLM API. Free, open source, and runs
+          entirely on your machine.
+        </p>
+        <div style="display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;">
+          <a class="btn-primary" href="https://github.com/chaudharydeepak/prompt-guard" target="_blank" rel="noopener">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            Star on GitHub
+          </a>
+          <a class="btn-secondary" href="https://github.com/chaudharydeepak/prompt-guard#readme" target="_blank" rel="noopener">
+            Read the docs
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Footer ─── -->
+  <footer>
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-left">
+          <div class="footer-left-icon">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+              <path d="M8 1L2 3.5v4c0 3.3 2.5 6.1 6 7 3.5-.9 6-3.7 6-7v-4L8 1z" fill="white" opacity="0.9"/>
+              <path d="M5.5 8l1.8 1.8L10.5 6.5" stroke="rgba(13,17,23,0.9)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <span class="footer-text">
+            Prompt Guard is open source (AGPL). Built for developers who take data privacy seriously.
+          </span>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/chaudharydeepak/prompt-guard" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/chaudharydeepak/prompt-guard/blob/master/LICENSE" target="_blank" rel="noopener">License</a>
+          <a href="https://github.com/chaudharydeepak/prompt-guard/issues" target="_blank" rel="noopener">Issues</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // ─── Copy button ───
+    function copyCode(btn, id) {
+      const el = document.getElementById(id);
+      // Extract plain text, stripping HTML tags
+      const text = el.innerText || el.textContent;
+      navigator.clipboard.writeText(text.trim()).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    // ─── Smooth scroll for anchor links ───
+    document.querySelectorAll('a[href^="#"]').forEach(a => {
+      a.addEventListener('click', e => {
+        const target = document.querySelector(a.getAttribute('href'));
+        if (target) {
+          e.preventDefault();
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+
+    // ─── Intersection observer: fade-in cards ───
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.style.opacity = '1';
+          entry.target.style.transform = 'translateY(0)';
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+    document.querySelectorAll('.problem-card, .feature-card, .step-item, .flow-step').forEach(el => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(20px)';
+      el.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+      observer.observe(el);
+    });
+  </script>
+
+</body>
+</html>
