@@ -1004,7 +1004,8 @@ var dashboardHTML = `<!DOCTYPE html>
       <div id="latency-table-wrap" style="height:0;overflow:hidden">
         <div style="border-top:1px solid var(--border);padding:0 4px 3px">
           <div style="max-height:160px;overflow-y:auto">
-          <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:11px">
+          <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed">
+            <colgroup><col style="width:220px"><col></colgroup>
             <thead id="model-latency-head" style="position:sticky;top:0;background:var(--bg-surface);z-index:1"></thead>
             <tbody id="model-latency-body"></tbody>
           </table>
