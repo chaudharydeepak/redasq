@@ -201,8 +201,8 @@ func TestPromptRowExpand(t *testing.T) {
 	}
 }
 
-// TestModelLatencyCards seeds prompts with model+duration and checks cards appear.
-func TestModelLatencyCards(t *testing.T) {
+// TestModelLatencyTable seeds prompts with model+duration and checks the latency table appears.
+func TestModelLatencyTable(t *testing.T) {
 	srv, db := newTestServer(t)
 	ctx, cancel := context.WithTimeout(newChrome(t), 20*time.Second)
 	defer cancel()
@@ -221,21 +221,21 @@ func TestModelLatencyCards(t *testing.T) {
 	}
 
 	var rowVisible bool
-	var cardText string
+	var tableText string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(srv.URL),
-		// Model latency row should appear after refreshModelStats fires on load.
+		// Model latency table row should appear after refreshModelStats fires on load.
 		chromedp.WaitVisible(`#model-latency-row`, chromedp.ByID),
 		chromedp.Evaluate(`document.getElementById('model-latency-row').style.display !== 'none'`, &rowVisible),
-		chromedp.Text(`#model-latency-cards`, &cardText, chromedp.ByID),
+		chromedp.Text(`#model-latency-body`, &tableText, chromedp.ByID),
 	)
 	if err != nil {
-		t.Fatalf("model latency cards: %v", err)
+		t.Fatalf("model latency table: %v", err)
 	}
 	if !rowVisible {
 		t.Error("model latency row should be visible when data exists")
 	}
-	if cardText == "" {
-		t.Error("model latency cards should contain text")
+	if tableText == "" {
+		t.Error("model latency table body should contain text")
 	}
 }

@@ -496,6 +496,14 @@ var dashboardHTML = `<!DOCTYPE html>
   .agent-mode-btn.is-on { background:rgba(245,158,11,.12); border-color:rgba(245,158,11,.4); color:#f59e0b; }
   .agent-mode-btn.is-on .agent-mode-state { color:#f59e0b; }
   /* Icon buttons: proper SVG icons instead of emoji, square with defined size */
+  .ri-wrap { display:flex;align-items:center;gap:4px;border:1px solid var(--border);border-radius:7px;padding:2px 4px;height:30px; }
+  .ri-opt { background:transparent;border:none;color:var(--text-3);font-size:11px;padding:2px 6px;border-radius:5px;cursor:pointer;font-family:inherit; }
+  .ri-opt:hover { background:var(--bg-raised);color:var(--text-1); }
+  .ri-opt-active { background:var(--bg-raised);color:var(--text-1);font-weight:600; }
+  .ri-sep { width:1px;background:var(--border);height:14px;margin:0 2px; }
+  .ri-refresh-btn { background:transparent;border:none;color:var(--text-2);cursor:pointer;padding:3px 5px;border-radius:5px;display:flex;align-items:center; }
+  .ri-refresh-btn:hover { background:var(--bg-raised);color:var(--text-1); }
+  .ri-refresh-btn svg { width:13px;height:13px;stroke:currentColor;stroke-width:2;fill:none; }
   .icon-btn { border: 1px solid var(--border); background: transparent; color: var(--text-2);
               border-radius: 7px; width: 32px; height: 32px; cursor: pointer; font-family: inherit;
               display: flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -787,6 +795,13 @@ var dashboardHTML = `<!DOCTYPE html>
   <div class="hd-sep"></div>
   <div class="hd-meta" id="meta">connecting…</div>
   <div class="hd-spacer"></div>
+  <!-- Refresh interval control -->
+  <div class="ri-wrap" id="ri-wrap">
+    <button class="ri-refresh-btn" onclick="manualRefresh()" title="Refresh now">
+      <svg viewBox="0 0 24 24"><path d="M4 4v5h5M20 20v-5h-5"/><path d="M4.07 15a8 8 0 1 0 .29-4.88L4 9"/></svg>
+    </button>
+    <div class="ri-sep"></div>
+  </div>
   <!-- Download icon (Heroicons outline) -->
   <button class="icon-btn" onclick="toggleExport()" title="Export prompts" id="export-btn">
     <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0-4-4m4 4 4-4M4 20h16"/></svg>
@@ -879,7 +894,17 @@ var dashboardHTML = `<!DOCTYPE html>
 
   <!-- Model latency row -->
   <div id="model-latency-row" style="display:none;margin-top:-8px;margin-bottom:18px">
-    <div id="model-latency-cards" class="tiles" style="margin-bottom:0"></div>
+    <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead>
+        <tr style="color:var(--text-3);text-align:left;border-bottom:1px solid var(--border)">
+          <th style="padding:5px 10px;font-weight:600">Model</th>
+          <th style="padding:5px 10px;font-weight:600;text-align:right">p50</th>
+          <th style="padding:5px 10px;font-weight:600;text-align:right">p95</th>
+          <th style="padding:5px 10px;font-weight:600;text-align:right">Requests</th>
+        </tr>
+      </thead>
+      <tbody id="model-latency-body"></tbody>
+    </table>
   </div>
 
   <div class="pg-cols">
@@ -1344,32 +1369,84 @@ async function refreshModelStats() {
   try {
     var stats = await fetch('/api/model-stats').then(function(r){ return r.json(); });
     var row = document.getElementById('model-latency-row');
-    var cards = document.getElementById('model-latency-cards');
+    var tbody = document.getElementById('model-latency-body');
     if (!stats || stats.length === 0) { row.style.display = 'none'; return; }
     row.style.display = 'block';
-    cards.innerHTML = stats.map(function(s) {
+    tbody.innerHTML = stats.map(function(s) {
       var p50 = s.p50_ms >= 1000 ? (s.p50_ms/1000).toFixed(1)+'s' : s.p50_ms+'ms';
       var p95 = s.p95_ms >= 1000 ? (s.p95_ms/1000).toFixed(1)+'s' : s.p95_ms+'ms';
       var p95Color = s.p95_ms > 10000 ? 'var(--danger)' : s.p95_ms > 5000 ? 'var(--warning)' : 'var(--text-1)';
-      return '<div class="tile tile-model" style="padding:11px 14px 10px">' +
-        '<div class="tile-lbl" title="'+esc(s.model)+'" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(s.model)+'</div>' +
-        '<div style="display:flex;gap:14px;margin-top:5px">' +
-          '<div>' +
-            '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3)">p50</div>' +
-            '<div style="font-size:20px;font-weight:700;letter-spacing:-.4px;color:var(--text-1);line-height:1.1">'+p50+'</div>' +
-          '</div>' +
-          '<div>' +
-            '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3)">p95</div>' +
-            '<div style="font-size:20px;font-weight:700;letter-spacing:-.4px;line-height:1.1;color:'+p95Color+'">'+p95+'</div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="tile-sub">'+s.sample+' req · last 50</div>' +
-      '</div>';
+      return '<tr style="border-bottom:1px solid var(--border)">' +
+        '<td style="padding:6px 10px;color:var(--text-2);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(s.model)+'">'+esc(s.model)+'</td>' +
+        '<td style="padding:6px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-1);font-weight:600">'+p50+'</td>' +
+        '<td style="padding:6px 10px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:'+p95Color+'">'+p95+'</td>' +
+        '<td style="padding:6px 10px;text-align:right;color:var(--text-3)">'+s.sample+' <span style="font-size:10px">/ 50</span></td>' +
+      '</tr>';
     }).join('');
   } catch(e) {}
 }
 
-setInterval(refresh, 3000);
+// ── Refresh interval control ──────────────────────────────────────────────────
+var _refreshTimer = null;
+
+var _refreshIntervals = [
+  { label: '5s',  ms: 5000  },
+  { label: '15s', ms: 15000 },
+  { label: '30s', ms: 30000 },
+  { label: '1m',  ms: 60000 },
+  { label: 'Off', ms: 0     },
+];
+var _refreshMs = 15000; // default
+
+function _startRefreshTimer() {
+  if (_refreshTimer) clearInterval(_refreshTimer);
+  if (_refreshMs > 0) {
+    _refreshTimer = setInterval(function() {
+      if (document.visibilityState !== 'hidden') refresh();
+    }, _refreshMs);
+  }
+}
+
+function setRefreshInterval(ms) {
+  _refreshMs = ms;
+  try { localStorage.setItem('pg-refresh-ms', ms); } catch(e) {}
+  _startRefreshTimer();
+  // Update selector UI
+  document.querySelectorAll('.ri-opt').forEach(function(el) {
+    el.classList.toggle('ri-opt-active', parseInt(el.dataset.ms) === ms);
+  });
+}
+
+function manualRefresh() {
+  refresh();
+  refreshModelStats();
+}
+
+// Restore saved preference
+try {
+  var saved = parseInt(localStorage.getItem('pg-refresh-ms'));
+  if (!isNaN(saved) && _refreshIntervals.some(function(r){ return r.ms === saved; })) _refreshMs = saved;
+} catch(e) {}
+
+// Build interval buttons into the header widget
+(function() {
+  var wrap = document.getElementById('ri-wrap');
+  _refreshIntervals.forEach(function(r) {
+    var btn = document.createElement('button');
+    btn.className = 'ri-opt' + (r.ms === _refreshMs ? ' ri-opt-active' : '');
+    btn.dataset.ms = r.ms;
+    btn.textContent = r.label;
+    btn.title = r.ms > 0 ? 'Auto-refresh every ' + r.label : 'Disable auto-refresh';
+    btn.onclick = function() { setRefreshInterval(r.ms); };
+    wrap.appendChild(btn);
+  });
+})();
+
+_startRefreshTimer();
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible') { refresh(); _startRefreshTimer(); }
+  else { if (_refreshTimer) clearInterval(_refreshTimer); _refreshTimer = null; }
+});
 
 function toggleExport() {
   var p = document.getElementById('export-panel');
