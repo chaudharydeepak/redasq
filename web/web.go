@@ -995,7 +995,7 @@ var dashboardHTML = `<!DOCTYPE html>
 
   <!-- Model latency row (collapsible) -->
   <div id="model-latency-row" style="display:none;margin-bottom:18px">
-    <div id="latency-panel" style="background:var(--surface);border:1px solid var(--border);border-left:3px solid #4f8ef7;border-radius:6px">
+    <div id="latency-panel" style="background:var(--bg-surface);border-radius:6px;box-shadow:0 0 0 1px var(--border),inset 3px 0 0 #4f8ef7">
       <button id="latency-toggle" onclick="toggleLatencyPanel()" aria-expanded="false" aria-controls="latency-table-wrap" style="width:100%;display:flex;align-items:center;gap:8px;padding:9px 14px;background:transparent;border:none;cursor:pointer;text-align:left;color:var(--text-2);font-size:12px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;user-select:none">
         <span id="latency-chevron" style="display:inline-block;font-size:10px;transition:transform 0.15s ease-out;transform:rotate(0deg);color:var(--text-3);line-height:1">&#9654;</span>
         <span>Model Latency</span>
