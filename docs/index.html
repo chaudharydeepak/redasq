@@ -8,6 +8,7 @@
   <meta property="og:title" content="Prompt Guard — Stop AI Tools From Leaking Your Secrets" />
   <meta property="og:description" content="230 detection rules. Block or redact. Full audit log. Single binary. No cloud." />
   <meta property="og:url" content="https://chaudharydeepak.github.io/prompt-guard/" />
+  <link rel="icon" type="image/svg+xml" href="logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -97,7 +98,6 @@
     .nav-logo-icon {
       width: 28px;
       height: 28px;
-      background: linear-gradient(135deg, var(--accent), var(--cyan));
       border-radius: 7px;
       display: flex;
       align-items: center;
@@ -1009,11 +1009,7 @@
       <div class="nav-inner">
         <a class="nav-logo" href="#">
           <div class="nav-logo-icon">
-            <!-- Shield icon -->
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M8 1L2 3.5v4c0 3.3 2.5 6.1 6 7 3.5-.9 6-3.7 6-7v-4L8 1z" fill="white" opacity="0.9"/>
-              <path d="M5.5 8l1.8 1.8L10.5 6.5" stroke="#0d1117" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
+            <img src="logo.svg" width="28" height="28" alt="Prompt Guard">
           </div>
           Prompt Guard
         </a>
@@ -1369,7 +1365,7 @@
 
       </div>
 
-      <!-- Live dashboard mockup -->
+      <!-- Live dashboard screenshot -->
       <div class="dashboard-mockup">
         <div class="mockup-header">
           <div class="mockup-dots">
@@ -1379,67 +1375,8 @@
           </div>
           <div class="mockup-url">localhost:7778 &mdash; Prompt Guard Dashboard</div>
         </div>
-        <div class="mockup-body">
-          <!-- Stat tiles -->
-          <div class="mockup-tiles">
-            <div class="mockup-tile blue">
-              <div class="tile-val">47</div>
-              <div class="tile-lbl">Total</div>
-            </div>
-            <div class="mockup-tile red">
-              <div class="tile-val red">3</div>
-              <div class="tile-lbl">Blocked</div>
-            </div>
-            <div class="mockup-tile amber">
-              <div class="tile-val amber">1</div>
-              <div class="tile-lbl">Flagged</div>
-            </div>
-            <div class="mockup-tile green">
-              <div class="tile-val">43</div>
-              <div class="tile-lbl">Clean</div>
-            </div>
-            <div class="mockup-tile cyan">
-              <div class="tile-val cyan">12</div>
-              <div class="tile-lbl">Redacted</div>
-            </div>
-            <div class="mockup-tile" style="border-top-color:var(--text-3);">
-              <div class="tile-val" style="font-size:15px;">214ms</div>
-              <div class="tile-lbl">Avg latency</div>
-            </div>
-            <div class="mockup-tile" style="border-top-color:var(--text-3);">
-              <div class="tile-val" style="font-size:15px;">84.2k</div>
-              <div class="tile-lbl">Tokens</div>
-            </div>
-          </div>
-          <!-- Table -->
-          <div class="mockup-table-head">
-            <div>Time</div>
-            <div>Prompt</div>
-            <div>Rules hit</div>
-            <div>Status</div>
-            <div>Model</div>
-          </div>
-          <div class="mockup-row">
-            <div class="mono-sm" style="color:var(--text-3)">14:32:01</div>
-            <div style="font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">Fix the auth middleware — here's my .env file...</div>
-            <div><span class="rule-chip">aws-key</span><span class="rule-chip">+2</span></div>
-            <div><span class="chip blocked">Blocked</span></div>
-            <div class="mono-sm" style="color:var(--text-3)">gpt-4o</div>
-          </div>
-          <div class="mockup-row">
-            <div class="mono-sm" style="color:var(--text-3)">14:31:45</div>
-            <div style="font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">Refactor the Stripe webhook handler to add retry logic</div>
-            <div><span class="rule-chip">stripe-key</span></div>
-            <div><span class="chip redacted">Redacted</span></div>
-            <div class="mono-sm" style="color:var(--text-3)">claude-3-5</div>
-          </div>
-          <div class="mockup-row">
-            <div class="mono-sm" style="color:var(--text-3)">14:31:12</div>
-            <div style="font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">Add unit tests for the user service</div>
-            <div style="color:var(--text-3);font-size:11px;">&mdash;</div>
-            <div><span class="chip clean">Clean</span></div>
-            <div class="mono-sm" style="color:var(--text-3)">claude-3-5</div>
-          </div>
+        <div style="line-height:0">
+          <img src="dashboard.png" alt="Prompt Guard Dashboard" style="width:100%;display:block;border-radius:0 0 10px 10px;">
         </div>
       </div>
 
