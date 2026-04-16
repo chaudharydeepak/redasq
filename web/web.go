@@ -999,9 +999,9 @@ var dashboardHTML = `<!DOCTYPE html>
         <span id="latency-summary" style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-3);letter-spacing:0;text-transform:none"></span>
       </button>
       <div id="latency-table-wrap" style="height:0;overflow:hidden">
-        <div style="border-top:1px solid var(--border);padding:4px 0 4px">
-          <div id="model-latency-body" style="max-height:160px;overflow-y:auto;overflow-x:hidden"></div>
-        </div>
+        <!-- <div style="border-top:1px solid var(--border);padding:4px 0 4px"> -->
+          <div id="model-latency-body" style="max-height:260px;overflow-y:auto;overflow-x:hidden"></div>
+        <!-- </div> -->
       </div>
     </div>
   </div>
@@ -1467,85 +1467,76 @@ fetch('/api/context-limits').then(function(r){ return r.json(); }).then(function
 async function refreshModelStats() {
   try {
     var stats = await fetch('/api/model-stats').then(function(r){ return r.json(); });
-    var row  = document.getElementById('model-latency-row');
-    var body = document.getElementById('model-latency-body');
+    var row     = document.getElementById('model-latency-row');
+    var body    = document.getElementById('model-latency-body');
     var summary = document.getElementById('latency-summary');
     if (!stats || stats.length === 0) { row.style.display = 'none'; return; }
     row.style.display = 'block';
 
-    // Collect unique clients and models (sorted).
-    var clientSet = {}, modelSet = {};
-    stats.forEach(function(s) { clientSet[s.client||''] = 1; modelSet[s.model] = 1; });
-    var clients = Object.keys(clientSet).sort();
-    var models  = Object.keys(modelSet).sort();
-    if (summary) summary.textContent = models.length + ' model' + (models.length === 1 ? '' : 's');
-
-    // Build lookup: model+client → stat.
-    var lookup = {};
-    stats.forEach(function(s) { lookup[s.model + '\0' + (s.client||'')] = s; });
-
-    var fmt = function(ms) { return ms >= 1000 ? (ms/1000).toFixed(1)+'s' : ms+'ms'; };
+    var fmt  = function(ms) { return ms >= 1000 ? (ms/1000).toFixed(1)+'s' : ms+'ms'; };
     var colr = function(ms) { return ms > 10000 ? 'var(--danger)' : ms > 5000 ? 'var(--warning)' : '#4caf82'; };
-    var hdrCell  = 'padding:3px 10px 5px;font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--text-3);border-bottom:1px solid var(--border);white-space:nowrap';
-    var dataCell = 'padding:4px 10px;font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums';
+    var trunc = function(s, n) { return s.length > n ? s.slice(0, n-1) + '\u2026' : s; };
 
-    var html;
+    // Group by model; collect unique clients.
+    var byModel = {}, modelOrder = [], clients = [];
+    stats.forEach(function(s) {
+      var m = s.model||'', c = s.client||'';
+      if (!byModel[m]) { byModel[m] = {}; modelOrder.push(m); }
+      byModel[m][c] = s;
+      if (clients.indexOf(c) < 0) clients.push(c);
+    });
+    modelOrder.sort(); clients.sort();
+    if (summary) summary.textContent = modelOrder.length + ' model' + (modelOrder.length === 1 ? '' : 's')
+      + ' \u00b7 ' + clients.length + ' client' + (clients.length === 1 ? '' : 's');
 
-    if (clients.length <= 1) {
-      // ── Single-client (or no client tag): flat table — Model | p50 | p95 | n ──
-      html = '<div style="display:grid;grid-template-columns:1fr 72px 72px 40px;min-width:0">';
-      // Header
-      html += '<div style="'+hdrCell+'">Model</div>';
-      html += '<div style="'+hdrCell+';text-align:right">p50</div>';
-      html += '<div style="'+hdrCell+';text-align:right">p95</div>';
-      html += '<div style="'+hdrCell+';text-align:right">n</div>';
-      // Rows
-      models.forEach(function(m, i) {
-        var bg = i % 2 === 1 ? 'background:rgba(0,0,0,0.035);' : '';
-        var s  = lookup[m + '\0' + (clients[0]||'')];
-        html += '<div style="'+dataCell+bg+'color:var(--text-2);overflow:hidden;text-overflow:ellipsis" title="'+esc(m)+'">'+esc(m)+'</div>';
+    // Style fragments
+    var thModel = 'padding:3px 10px 5px;font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--text-3);border-top:1px solid var(--border);border-bottom:1px solid var(--border);text-align:left;vertical-align:bottom;white-space:nowrap;border-left:1px solid var(--border)';
+    var thClient = 'padding:4px 10px 2px;font-size:10px;font-weight:600;letter-spacing:0.03em;text-transform:uppercase;color:var(--text-2);text-align:center;white-space:nowrap;border-top:1px solid var(--border);border-bottom:1px solid var(--border);border-left:1px solid var(--border)';
+    var thSub = function(first) {
+      return 'padding:2px 8px 4px;font-size:10px;font-weight:500;color:var(--text-3);text-align:right;border-bottom:1px solid var(--border);white-space:nowrap' + (first ? ';border-left:1px solid var(--border)' : '');
+    };
+    var tdModel = 'padding:4px 10px;font-size:11px;text-align:left;color:var(--text-2);border-left:1px solid var(--border)';
+    var tdNum = function(first) {
+      return 'padding:4px 8px;font-size:11px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap' + (first ? ';border-left:1px solid var(--border)' : '');
+    };
+    // Corner cell: CLIENT (same size as Model) at top, Model at bottom.
+    var cornerCell = '<th rowspan="2" style="'+thModel+';padding:0;width:140px">' +
+      '<div style="display:flex;flex-direction:column;justify-content:space-between;height:100%;min-height:44px;padding:4px 10px 5px">' +
+        '<span style="font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--text-3)">CLIENT</span>' +
+        '<span>Model</span>' +
+      '</div></th>';
+
+    // 2-row pivot header: corner | client group names | then p50/p95/n row
+    var html = '<table style="table-layout:auto;width:100%;border-collapse:collapse"><thead>';
+    html += '<tr>' + cornerCell;
+    clients.forEach(function(c) {
+      html += '<th colspan="3" style="'+thClient+'" title="'+esc(c||'unknown')+'">'+esc(trunc(c||'unknown', 20))+'</th>';
+    });
+    html += '</tr><tr>';
+    clients.forEach(function() {
+      html += '<th style="'+thSub(true)+'">p50</th><th style="'+thSub(false)+'">p95</th><th style="'+thSub(false)+'">n</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    // One row per model.
+    modelOrder.forEach(function(m, i) {
+      var bg = i % 2 === 1 ? 'background:rgba(0,0,0,0.035)' : '';
+      html += '<tr style="'+bg+'"><td style="'+tdModel+'"><div style="width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(m)+'">'+esc(m)+'</div></td>';
+      clients.forEach(function(c) {
+        var s = byModel[m] && byModel[m][c];
         if (s) {
-          html += '<div style="'+dataCell+bg+'text-align:right;color:var(--text-1);font-weight:600">'+fmt(s.p50_ms)+'</div>';
-          html += '<div style="'+dataCell+bg+'text-align:right;color:'+colr(s.p95_ms)+';font-weight:600">'+fmt(s.p95_ms)+'</div>';
-          html += '<div style="'+dataCell+bg+'text-align:right;color:var(--text-3)">'+s.sample+'</div>';
+          html += '<td style="'+tdNum(true)+';color:var(--text-1);font-weight:600">'+fmt(s.p50_ms)+'</td>';
+          html += '<td style="'+tdNum(false)+';color:'+colr(s.p95_ms)+';font-weight:600">'+fmt(s.p95_ms)+'</td>';
+          html += '<td style="'+tdNum(false)+';color:var(--text-3);font-size:10px">'+s.sample+'</td>';
         } else {
-          html += '<div style="'+dataCell+bg+'text-align:right;color:var(--text-3)">—</div>';
-          html += '<div style="'+dataCell+bg+'text-align:right;color:var(--text-3)">—</div>';
-          html += '<div style="'+dataCell+bg+'text-align:right;color:var(--text-3)">—</div>';
+          html += '<td style="'+tdNum(true)+';color:var(--text-3)">\u2014</td>';
+          html += '<td style="'+tdNum(false)+';color:var(--text-3)">\u2014</td>';
+          html += '<td style="'+tdNum(false)+';color:var(--text-3);font-size:10px">\u2014</td>';
         }
       });
-      html += '</div>';
-    } else {
-      // ── Multi-client: pivot — Model | ClientA (p50/p95 n) | ClientB … ──
-      var clientW = 140;
-      var gridCols = '1fr ' + clients.map(function() { return clientW+'px'; }).join(' ');
-      html = '<div style="display:grid;grid-template-columns:'+gridCols+';min-width:0">';
-      // Header
-      html += '<div style="'+hdrCell+'">Model</div>';
-      clients.forEach(function(c) {
-        html += '<div style="'+hdrCell+';text-align:right">'+esc(c||'unknown')+'</div>';
-      });
-      // Rows
-      models.forEach(function(m, i) {
-        var bg = i % 2 === 1 ? 'background:rgba(0,0,0,0.035);' : '';
-        html += '<div style="'+dataCell+bg+'color:var(--text-2);overflow:hidden;text-overflow:ellipsis" title="'+esc(m)+'">'+esc(m)+'</div>';
-        clients.forEach(function(c) {
-          var s = lookup[m + '\0' + c];
-          if (s) {
-            html += '<div style="'+dataCell+bg+'text-align:right">' +
-              '<span style="color:var(--text-1);font-weight:600">'+fmt(s.p50_ms)+'</span>' +
-              '<span style="color:var(--text-3)"> / </span>' +
-              '<span style="color:'+colr(s.p95_ms)+';font-weight:600">'+fmt(s.p95_ms)+'</span>' +
-              '<span style="color:var(--text-3);font-size:9px">&thinsp;('+s.sample+')</span>' +
-              '</div>';
-          } else {
-            html += '<div style="'+dataCell+bg+'text-align:right;color:var(--text-3)">—</div>';
-          }
-        });
-      });
-      html += '</div>';
-    }
-
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
     body.innerHTML = html;
 
     // Re-fit height if panel open.
