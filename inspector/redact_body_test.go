@@ -113,7 +113,7 @@ func TestRedactBody_NestedContent(t *testing.T) {
 			{"role": "system", "content": "You are a helpful assistant."},
 			{"role": "user",   "content": "What should I do?"},
 			{"role": "assistant", "content": "Here is the config context."},
-			{"role": "user",   "content": "password: Sup3rS3cr3tDBPass!\naws_secret: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}
+			{"role": "user",   "content": "password: Sup3rS3cr3tDBPass!\naws_secret: secret_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}
 		]
 	}`)
 

@@ -195,7 +195,7 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 				Prompt:    summary,
 				Status:    store.StatusTelemetry,
 			})
-			p.forward(tlsClient, req, hostport)
+			p.forward(tlsClient, req, hostport) //nolint:errcheck
 			continue
 		}
 
@@ -260,7 +260,7 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		// inspect and redact them; we just don't terminate the connection.
 		allowBlock := !isCopilotBackground(body)
 
-		blocked, msg, savedID := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock, sessionID, client, model)
+		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock, sessionID, client, model)
 		if blocked {
 			if strings.Contains(stripPort(hostport), "claude.ai") {
 				writeHTTPError(tlsClient, 400, msg)
@@ -272,11 +272,15 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 
 		// Forward to real upstream and pipe response back.
 		// Measure TTFB (request sent → response headers received) and persist it.
-		ttfb, inTok, outTok, err := p.forward(tlsClient, req, hostport)
+		ttfb, inTok, outTok, respBytes, err := p.forward(tlsClient, req, hostport)
 		if savedID > 0 {
 			p.db.UpdateDuration(savedID, ttfb.Milliseconds())
 			if inTok > 0 || outTok > 0 {
 				p.db.UpdateTokens(savedID, inTok, outTok)
+			}
+			// Store LLM response for compliance when request was redacted (track-mode rules fired).
+			if status == store.StatusRedacted && len(respBytes) > 0 {
+				p.db.UpdateLLMResponse(savedID, ExtractResponseText(respBytes))
 			}
 		}
 		if err != nil {
@@ -338,8 +342,8 @@ func (p *proxy) dialUpstream(hostport string) (net.Conn, error) {
 }
 
 // forward dials the real upstream, sends the request, and writes the response back to dst.
-// Returns the time-to-first-byte and token usage parsed from the response.
-func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) (time.Duration, int, int, error) {
+// Returns the time-to-first-byte, token usage, raw response bytes (capped at 2KB), and any error.
+func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) (time.Duration, int, int, []byte, error) {
 	hostname := hostport
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		hostname = h
@@ -347,7 +351,7 @@ func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) (time.
 
 	tcpConn, err := p.dialUpstream(hostport)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 	up := tls.Client(tcpConn, &tls.Config{
 		ServerName: hostname,
@@ -355,11 +359,11 @@ func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) (time.
 	})
 	if err := up.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
 		tcpConn.Close()
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 	if err := up.Handshake(); err != nil {
 		tcpConn.Close()
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 	up.SetDeadline(time.Time{})
 	defer up.Close()
@@ -370,13 +374,13 @@ func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) (time.
 
 	start := time.Now()
 	if err := req.Write(up); err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(up), req)
 	ttfb := time.Since(start)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 	defer resp.Body.Close()
 
@@ -389,9 +393,24 @@ func (p *proxy) forward(dst net.Conn, req *http.Request, hostport string) (time.
 	if writeErr != nil {
 		io.Copy(io.Discard, resp.Body)
 	}
-	in, out := ExtractUsage(buf.Bytes())
+	raw := buf.Bytes()
+	in, out := ExtractUsage(raw)
 	debugf("USAGE: input=%d output=%d", in, out)
-	return ttfb, in, out, writeErr
+
+	// Capture the full response for compliance text extraction.
+	// ExtractResponseText caps the extracted plain text at 2KB — we don't limit raw bytes here
+	// because SSE envelopes are verbose and a 2KB response may span many kilobytes of raw stream.
+	const maxResponseStore = 512 * 1024 // 512KB raw cap — safety net only
+	var respSnippet []byte
+	if len(raw) > 0 {
+		end := len(raw)
+		if end > maxResponseStore {
+			end = maxResponseStore
+		}
+		respSnippet = make([]byte, end)
+		copy(respSnippet, raw[:end])
+	}
+	return ttfb, in, out, respSnippet, writeErr
 }
 
 // isTelemetry reports whether the body is an analytics/telemetry payload
@@ -488,10 +507,10 @@ func isCopilotBackground(body []byte) bool {
 // inspectAndStore stores every intercepted prompt.
 // redactions are track-mode matches already applied to the forwarded body.
 // allowBlock: if false, block-mode rules are recorded but the request is not terminated.
-// Returns (blocked, assistantMessage, savedRowID). savedRowID is 0 if nothing was stored.
-func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombined, displayPrompt string, redactions []inspector.Match, allowBlock bool, sessionID, client, model string) (bool, string, int64) {
+// Returns (blocked, assistantMessage, savedRowID, status). savedRowID is 0 if nothing was stored.
+func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombined, displayPrompt string, redactions []inspector.Match, allowBlock bool, sessionID, client, model string) (bool, string, int64, store.Status) {
 	if combined == "" && len(redactions) == 0 {
-		return false, "", 0
+		return false, "", 0, store.StatusClean
 	}
 
 	result := p.eng.Inspect(combined)
@@ -542,7 +561,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 	}
 
 	if !result.Blocked || !allowBlock {
-		return false, "", savedID
+		return false, "", savedID, status
 	}
 
 	var ruleNames []string
@@ -557,7 +576,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 		msg += "- " + name + "\n"
 	}
 	msg += "\nThis request was **not forwarded** to the AI. Please remove the sensitive data and try again."
-	return true, msg, savedID
+	return true, msg, savedID, status
 }
 
 // writeHTTPError writes a plain HTTP error response for non-API clients (e.g. claude.ai web).

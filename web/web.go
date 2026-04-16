@@ -149,6 +149,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 		SessionID      string            `json:"session_id"`
 		Client         string            `json:"client"`
 		Model          string            `json:"model"`
+		LLMResponse    string            `json:"llm_response,omitempty"`
 	}
 	out := make([]row, 0, len(prompts))
 	for _, p := range prompts {
@@ -182,6 +183,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 			SessionID:      p.SessionID,
 			Client:         p.Client,
 			Model:          p.Model,
+			LLMResponse:    truncate(p.LLMResponse, 800),
 		})
 	}
 	type response struct {
@@ -1183,6 +1185,7 @@ function toggleDetail(id) {
   var p = (window._promptData || {})[id] || {};
   var prompt         = p.prompt          || '';
   var redactedPrompt = p.redacted_prompt || '';
+  var llmResponse    = p.llm_response    || '';
   var matches = p.matches || [];
   var status  = p.status  || '';
 
@@ -1202,6 +1205,13 @@ function toggleDetail(id) {
       '<div class="detail-pre" style="border-color:rgba(167,139,250,.3)">'+esc(redactedPrompt)+'</div>';
   } else {
     promptSection = '<div class="detail-pre">'+esc(prompt)+'</div>';
+  }
+
+  var llmSection = '';
+  if (llmResponse) {
+    llmSection =
+      '<div class="detail-section-lbl" style="margin-top:14px;color:#e8a838">LLM Response (compliance log)</div>' +
+      '<div class="detail-pre" style="border-color:rgba(232,168,56,.3);color:var(--text-2);font-size:11.5px;white-space:pre-wrap;word-break:break-all">'+esc(llmResponse)+'</div>';
   }
 
   var matchHTML = matches.length === 0
@@ -1230,7 +1240,7 @@ function toggleDetail(id) {
   td.colSpan = 11;
   td.innerHTML =
     '<div class="detail-wrap">' +
-      banner + promptSection + tokenInfo +
+      banner + promptSection + llmSection + tokenInfo +
       '<div class="detail-section-lbl" style="margin-top:14px;margin-bottom:6px">Matched Rules</div>' +
       '<div class="match-list">'+matchHTML+'</div>' +
     '</div>';
@@ -1331,7 +1341,7 @@ async function refresh() {
             ? '<td class="mono muted" title="'+esc(modelVal)+'">'+esc(modelVal)+'</td>'
             : '<td class="mono muted" style="color:var(--text-3)">—</td>';
           return '<tr id="row-'+p.id+'" class="row-'+p.status+'" onclick="toggleDetail('+p.id+')">' +
-            '<td class="mono muted">'+esc(p.time)+'</td>' +
+            '<td class="mono muted"><span style="display:block;font-size:10px;color:var(--text-3);margin-bottom:1px">#'+p.id+'</span>'+esc(p.time)+'</td>' +
             '<td>'+statusTag(p.status)+agentBadge+'</td>' +
             '<td class="td-host" title="'+esc(p.host)+'">'+esc(p.host)+'</td>' +
             '<td class="mono muted td-path" title="'+esc(p.path)+'">'+esc(shortPath)+'</td>' +

@@ -409,6 +409,99 @@ func ExtractUsage(body []byte) (inputTokens, outputTokens int) {
 	return
 }
 
+// ExtractResponseText pulls plain text from an LLM response body.
+// Handles Anthropic and OpenAI SSE streams as well as plain JSON responses.
+// Returns the assembled text content, capped at 2KB.
+func ExtractResponseText(body []byte) string {
+	const maxLen = 2048
+	var out strings.Builder
+
+	// Try plain JSON first (non-streaming response).
+	var plain struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(body, &plain) == nil {
+		// Anthropic non-streaming
+		for _, c := range plain.Content {
+			if c.Type == "text" {
+				out.WriteString(c.Text)
+			}
+		}
+		// OpenAI non-streaming
+		for _, c := range plain.Choices {
+			out.WriteString(c.Message.Content)
+		}
+		if out.Len() > 0 {
+			s := out.String()
+			if len(s) > maxLen {
+				s = s[:maxLen]
+			}
+			return s
+		}
+	}
+
+	// SSE stream — scan each data: line for text deltas.
+	// Use RawMessage for delta so a string value (Responses API) doesn't abort
+	// unmarshaling the whole line when the struct expects an object (Anthropic).
+	type deltaLine struct {
+		Type    string          `json:"type"`
+		Delta   json.RawMessage `json:"delta"` // string (Responses API) or object (Anthropic)
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimPrefix(strings.TrimSpace(line), "data: ")
+		if line == "" || line == "[DONE]" {
+			continue
+		}
+		var dl deltaLine
+		if err := json.Unmarshal([]byte(line), &dl); err != nil {
+			continue
+		}
+		// OpenAI Responses API: delta is a plain string
+		if dl.Type == "response.output_text.delta" || dl.Type == "response.text.delta" {
+			var s string
+			if json.Unmarshal(dl.Delta, &s) == nil && s != "" {
+				out.WriteString(s)
+			}
+		}
+		// Anthropic content_block_delta: delta is {"type":"text_delta","text":"..."}
+		if len(dl.Delta) > 0 && dl.Delta[0] == '{' {
+			var obj struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(dl.Delta, &obj) == nil && obj.Type == "text_delta" {
+				out.WriteString(obj.Text)
+			}
+		}
+		// OpenAI chat.completions
+		for _, c := range dl.Choices {
+			out.WriteString(c.Delta.Content)
+		}
+		if out.Len() >= maxLen {
+			break
+		}
+	}
+
+	s := out.String()
+	if len(s) > maxLen {
+		s = s[:maxLen]
+	}
+	return s
+}
+
 
 // ExtractModel returns the model name from an OpenAI or Anthropic request body.
 func ExtractModel(body []byte) string {

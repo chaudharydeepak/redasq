@@ -58,7 +58,6 @@ import tomllib
 # Broad/structural patterns keep SeverityMedium so the UI left-border colour
 # still distinguishes them from specific token rules (SeverityHigh).
 MEDIUM_IDS = {
-    "generic-api-key",        # matches any `key = value` broadly — ModeTrack (see below)
     "hashicorp-tf-password",  # matches "password" keyword broadly
     "curl-auth-header",       # curl commands containing real credentials
     "curl-auth-user",         # curl commands containing real credentials
@@ -73,7 +72,6 @@ MEDIUM_IDS = {
 # injected by tools like Copilot CLI, blocking every request. Track redacts
 # matches without hard-stopping the request.
 TRACK_IDS = {
-    "generic-api-key",
 }
 
 
