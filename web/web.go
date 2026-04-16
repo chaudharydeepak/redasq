@@ -1004,8 +1004,7 @@ var dashboardHTML = `<!DOCTYPE html>
       <div id="latency-table-wrap" style="height:0;overflow:hidden">
         <div style="border-top:1px solid var(--border);padding:0 4px 3px">
           <div style="max-height:160px;overflow-y:auto">
-          <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed">
-            <colgroup></colgroup>
+          <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:11px">
             <thead id="model-latency-head" style="position:sticky;top:0;background:var(--bg-surface);z-index:1"></thead>
             <tbody id="model-latency-body"></tbody>
           </table>
@@ -1501,17 +1500,11 @@ async function refreshModelStats() {
     var col  = function(ms) { return ms > 10000 ? 'var(--danger)' : ms > 5000 ? 'var(--warning)' : '#4caf82'; };
     var thStyle = 'padding:4px 10px;font-weight:600;font-size:10px;letter-spacing:0.04em;text-transform:uppercase;color:var(--text-3)';
 
-    // Set fixed column widths: 220px for Model, equal share of remainder for each client.
-    var colgroup = document.querySelector('#model-latency-table colgroup');
-    if (colgroup) {
-      var clientColW = Math.max(140, Math.floor((colgroup.closest('table').offsetWidth - 220) / clients.length));
-      colgroup.innerHTML = '<col style="width:220px">' + clients.map(function() { return '<col style="width:'+clientColW+'px">'; }).join('');
-    }
-
     // Build header dynamically.
-    var hdr = '<tr><th style="'+thStyle+'">Model</th>';
+    var clientW = Math.floor(70 / Math.max(clients.length, 1)) + '%';
+    var hdr = '<tr><th style="'+thStyle+';width:30%">Model</th>';
     clients.forEach(function(c) {
-      hdr += '<th style="'+thStyle+';text-align:right">'+esc(c||'unknown')+'</th>';
+      hdr += '<th style="'+thStyle+';text-align:right;width:'+clientW+'">'+esc(c||'unknown')+'</th>';
     });
     hdr += '<th style="'+thStyle+';text-align:right">n</th></tr>';
     thead.innerHTML = hdr;
