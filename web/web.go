@@ -504,6 +504,10 @@ var dashboardHTML = `<!DOCTYPE html>
   .ri-refresh-btn { background:transparent;border:none;color:var(--text-2);cursor:pointer;padding:3px 5px;border-radius:5px;display:flex;align-items:center; }
   .ri-refresh-btn:hover { background:var(--bg-raised);color:var(--text-1); }
   .ri-refresh-btn svg { width:13px;height:13px;stroke:currentColor;stroke-width:2;fill:none; }
+  #latency-toggle:hover { background:rgba(255,255,255,0.04); }
+  #model-latency-body tr:nth-child(odd) { background:rgba(255,255,255,0.025); }
+  #model-latency-body tr:hover { background:rgba(79,142,247,0.07); }
+  #model-latency-body tr { transition:background 0.12s; }
   .icon-btn { border: 1px solid var(--border); background: transparent; color: var(--text-2);
               border-radius: 7px; width: 32px; height: 32px; cursor: pointer; font-family: inherit;
               display: flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -892,19 +896,30 @@ var dashboardHTML = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Model latency row -->
-  <div id="model-latency-row" style="display:none;margin-top:-8px;margin-bottom:18px">
-    <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:12px">
-      <thead>
-        <tr style="color:var(--text-3);text-align:left;border-bottom:1px solid var(--border)">
-          <th style="padding:5px 10px;font-weight:600">Model</th>
-          <th style="padding:5px 10px;font-weight:600;text-align:right">p50</th>
-          <th style="padding:5px 10px;font-weight:600;text-align:right">p95</th>
-          <th style="padding:5px 10px;font-weight:600;text-align:right">Requests</th>
-        </tr>
-      </thead>
-      <tbody id="model-latency-body"></tbody>
-    </table>
+  <!-- Model latency row (collapsible) -->
+  <div id="model-latency-row" style="display:none;margin-bottom:18px">
+    <div id="latency-panel" style="background:var(--surface);border:1px solid var(--border);border-left:3px solid #4f8ef7;border-radius:6px;overflow:hidden">
+      <button id="latency-toggle" onclick="toggleLatencyPanel()" aria-expanded="false" aria-controls="latency-table-wrap" style="width:100%;display:flex;align-items:center;gap:8px;padding:9px 14px;background:transparent;border:none;cursor:pointer;text-align:left;color:var(--text-2);font-size:12px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;user-select:none">
+        <span id="latency-chevron" style="display:inline-block;font-size:10px;transition:transform 0.18s ease;transform:rotate(0deg);color:var(--text-3);line-height:1">&#9654;</span>
+        <span>Model Latency</span>
+        <span id="latency-summary" style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-3);letter-spacing:0;text-transform:none"></span>
+      </button>
+      <div id="latency-table-wrap" style="max-height:0;overflow:hidden;transition:max-height 0.22s ease">
+        <div style="border-top:1px solid var(--border);padding:0 4px 6px">
+          <table id="model-latency-table" style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="color:var(--text-3);text-align:left">
+                <th style="padding:7px 10px;font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase">Model</th>
+                <th style="padding:7px 10px;font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;text-align:right">p50</th>
+                <th style="padding:7px 10px;font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;text-align:right">p95</th>
+                <th style="padding:7px 10px;font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;text-align:right">Requests</th>
+              </tr>
+            </thead>
+            <tbody id="model-latency-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="pg-cols">
@@ -1360,7 +1375,7 @@ function toggleRulesPanel() {
 try { if (localStorage.getItem('rules-collapsed') === 'true') document.body.classList.add('rules-collapsed'); } catch(e) {}
 
 refresh();
-refreshModelStats();
+refreshModelStats().then(restoreLatencyPanel);
 loadRules();
 fetch('/api/agent-mode').then(function(r){ return r.json(); }).then(function(d){ updateAgentModeUI(d.agent_mode); });
 fetch('/api/context-limits').then(function(r){ return r.json(); }).then(function(d){ _ctxLimits = d; });
@@ -1370,19 +1385,60 @@ async function refreshModelStats() {
     var stats = await fetch('/api/model-stats').then(function(r){ return r.json(); });
     var row = document.getElementById('model-latency-row');
     var tbody = document.getElementById('model-latency-body');
+    var summary = document.getElementById('latency-summary');
     if (!stats || stats.length === 0) { row.style.display = 'none'; return; }
     row.style.display = 'block';
+    if (summary) summary.textContent = stats.length + (stats.length === 1 ? ' model' : ' models');
     tbody.innerHTML = stats.map(function(s) {
       var p50 = s.p50_ms >= 1000 ? (s.p50_ms/1000).toFixed(1)+'s' : s.p50_ms+'ms';
       var p95 = s.p95_ms >= 1000 ? (s.p95_ms/1000).toFixed(1)+'s' : s.p95_ms+'ms';
-      var p95Color = s.p95_ms > 10000 ? 'var(--danger)' : s.p95_ms > 5000 ? 'var(--warning)' : 'var(--text-1)';
-      return '<tr style="border-bottom:1px solid var(--border)">' +
+      var p95Color = s.p95_ms > 10000 ? 'var(--danger)' : s.p95_ms > 5000 ? 'var(--warning)' : '#4caf82';
+      return '<tr>' +
         '<td style="padding:6px 10px;color:var(--text-2);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(s.model)+'">'+esc(s.model)+'</td>' +
-        '<td style="padding:6px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-1);font-weight:600">'+p50+'</td>' +
-        '<td style="padding:6px 10px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:'+p95Color+'">'+p95+'</td>' +
-        '<td style="padding:6px 10px;text-align:right;color:var(--text-3)">'+s.sample+' <span style="font-size:10px">/ 50</span></td>' +
+        '<td style="padding:6px 10px;text-align:right;font-family:monospace;font-variant-numeric:tabular-nums;color:var(--text-1);font-weight:600">'+p50+'</td>' +
+        '<td style="padding:6px 10px;text-align:right;font-family:monospace;font-variant-numeric:tabular-nums;font-weight:600;color:'+p95Color+'">'+p95+'</td>' +
+        '<td style="padding:6px 10px;text-align:right;color:var(--text-3);font-variant-numeric:tabular-nums">'+s.sample+' <span style="font-size:10px">/ 50</span></td>' +
       '</tr>';
     }).join('');
+    // Re-fit height if panel is currently open.
+    var wrap = document.getElementById('latency-table-wrap');
+    var btn = document.getElementById('latency-toggle');
+    if (wrap && btn && btn.getAttribute('aria-expanded') === 'true') {
+      wrap.style.maxHeight = wrap.scrollHeight + 'px';
+    }
+  } catch(e) {}
+}
+
+function toggleLatencyPanel() {
+  var wrap = document.getElementById('latency-table-wrap');
+  var chevron = document.getElementById('latency-chevron');
+  var btn = document.getElementById('latency-toggle');
+  var isOpen = btn.getAttribute('aria-expanded') === 'true';
+  if (isOpen) {
+    wrap.style.maxHeight = '0px';
+    chevron.style.transform = 'rotate(0deg)';
+    btn.setAttribute('aria-expanded', 'false');
+    try { localStorage.setItem('latencyPanelOpen', '0'); } catch(e) {}
+  } else {
+    wrap.style.maxHeight = wrap.scrollHeight + 'px';
+    chevron.style.transform = 'rotate(90deg)';
+    btn.setAttribute('aria-expanded', 'true');
+    try { localStorage.setItem('latencyPanelOpen', '1'); } catch(e) {}
+  }
+}
+
+function restoreLatencyPanel() {
+  try {
+    if (localStorage.getItem('latencyPanelOpen') === '1') {
+      var wrap = document.getElementById('latency-table-wrap');
+      var chevron = document.getElementById('latency-chevron');
+      var btn = document.getElementById('latency-toggle');
+      if (wrap) {
+        wrap.style.maxHeight = wrap.scrollHeight + 'px';
+        chevron.style.transform = 'rotate(90deg)';
+        btn.setAttribute('aria-expanded', 'true');
+      }
+    }
   } catch(e) {}
 }
 
