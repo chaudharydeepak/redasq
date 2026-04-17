@@ -131,8 +131,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            prompt-guard-*.tar.gz
-            prompt-guard-*.tar.gz.sha256
+            prompt-guard-darwin-*.tar.gz
+            prompt-guard-darwin-*.tar.gz.sha256
+            prompt-guard-linux-*.tar.gz
+            prompt-guard-linux-*.tar.gz.sha256
             prompt-guard--*.bottle.tar.gz
             prompt-guard--*.bottle.tar.gz.sha256
             prompt-guard-windows-amd64.exe
