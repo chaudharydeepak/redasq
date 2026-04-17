@@ -14,6 +14,9 @@ import (
 	"github.com/chaudharydeepak/prompt-guard/store"
 )
 
+// Version is displayed in the dashboard header. Set from main via web.Version = version.
+var Version = "dev"
+
 // NewHandler builds and returns the dashboard HTTP handler without starting a server.
 // Used directly in tests via httptest.NewServer.
 func NewHandler(db *store.Store, eng *inspector.Engine, configPath string) http.Handler {
@@ -101,7 +104,7 @@ func registerRoutes(mux *http.ServeMux, db *store.Store, eng *inspector.Engine, 
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, dashboardHTML)
+		fmt.Fprint(w, strings.Replace(dashboardHTML, "{{VERSION}}", Version, 1))
 	})
 }
 
@@ -522,6 +525,7 @@ var dashboardHTML = `<!DOCTYPE html>
         backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
   .hd-logo { display: flex; align-items: center; gap: 9px; }
   .hd-shield { width: 26px; height: 26px; flex-shrink: 0; }
+  .hd-version { font-size: 10px; font-weight: 500; color: var(--text-3); letter-spacing: 0.03em; margin-left: 6px; opacity: 0.7; align-self: flex-end; padding-bottom: 1px; }
   /* Product name: "Prompt" in default text, "Guard" in accent — reversed from original
      so the differentiating word is accented, matching Linear/Vercel conventions */
   .hd-name { font-weight: 700; font-size: 15px; letter-spacing: -.4px; }
@@ -839,7 +843,7 @@ var dashboardHTML = `<!DOCTYPE html>
   <div class="hd-logo">
     <a href="https://github.com/chaudharydeepak/prompt-guard" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit;">
     <img src="/favicon.svg" class="hd-shield" alt="Prompt Guard">
-    <div class="hd-name">Prompt<em>Guard</em></div>
+    <div class="hd-name">Prompt<em>Guard</em><span class="hd-version">{{VERSION}}</span></div>
     </a>
   </div>
   <div class="hd-sep"></div>

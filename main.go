@@ -81,6 +81,7 @@ func main() {
 		log.Printf("agent mode: ON (persisted from last run)")
 	}
 
+	web.Version = version
 	printSetup(ca.CertPath, *port, *webPort, *upstreamProxy)
 	web.Start(*webPort, db, eng, filepath.Join(*caDir, "rules.json"))
 	log.Fatal(proxy.Start(*port, ca, db, eng, *upstreamProxy))
