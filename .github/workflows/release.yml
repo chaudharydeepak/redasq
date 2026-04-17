@@ -90,7 +90,7 @@ jobs:
           for tag in ${{ matrix.bottle_tags }}; do
             mkdir -p "btl/prompt-guard/${VER}/bin"
             cp ${{ matrix.asset }} "btl/prompt-guard/${VER}/bin/prompt-guard"
-            BOTTLE="prompt-guard--${VER}.${tag}.bottle.tar.gz"
+            BOTTLE="prompt-guard-${VER}.${tag}.bottle.tar.gz"
             tar czf "${BOTTLE}" -C btl prompt-guard
             sha256sum "${BOTTLE}" > "${BOTTLE}.sha256"
             rm -rf btl
@@ -107,8 +107,8 @@ jobs:
           path: |
             ${{ matrix.tarball }}
             ${{ matrix.tarball }}.sha256
-            prompt-guard--*.bottle.tar.gz
-            prompt-guard--*.bottle.tar.gz.sha256
+            prompt-guard-*.bottle.tar.gz
+            prompt-guard-*.bottle.tar.gz.sha256
 
       - uses: actions/upload-artifact@v4
         if: matrix.tarball == ''
@@ -135,8 +135,8 @@ jobs:
             prompt-guard-darwin-*.tar.gz.sha256
             prompt-guard-linux-*.tar.gz
             prompt-guard-linux-*.tar.gz.sha256
-            prompt-guard--*.bottle.tar.gz
-            prompt-guard--*.bottle.tar.gz.sha256
+            prompt-guard-*.bottle.tar.gz
+            prompt-guard-*.bottle.tar.gz.sha256
             prompt-guard-windows-amd64.exe
             prompt-guard-windows-amd64.exe.sha256
           generate_release_notes: true
@@ -166,10 +166,10 @@ jobs:
         run: |
           VER="${VERSION#v}"
           LINES=""
-          for f in prompt-guard--${VER}.*.bottle.tar.gz.sha256; do
+          for f in prompt-guard-${VER}.*.bottle.tar.gz.sha256; do
             [ -f "$f" ] || continue
             sha=$(awk '{print $1}' "$f")
-            tag=$(echo "$f" | sed "s/prompt-guard--${VER}\.\(.*\)\.bottle\.tar\.gz\.sha256/\1/")
+            tag=$(echo "$f" | sed "s/prompt-guard-${VER}\.\(.*\)\.bottle\.tar\.gz\.sha256/\1/")
             LINES="${LINES}      sha256 cellar: :any_skip_relocation, ${tag}: \"${sha}\"\n"
           done
           # Store as multiline output
