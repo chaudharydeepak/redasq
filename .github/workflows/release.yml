@@ -37,22 +37,27 @@ jobs:
             goarch: arm64
             asset: prompt-guard-darwin-arm64
             tarball: prompt-guard-darwin-arm64.tar.gz
+            bottle_tags: "arm64_sequoia arm64_sonoma arm64_ventura"
           - goos: darwin
             goarch: amd64
             asset: prompt-guard-darwin-amd64
             tarball: prompt-guard-darwin-amd64.tar.gz
+            bottle_tags: "sequoia sonoma ventura"
           - goos: linux
             goarch: arm64
             asset: prompt-guard-linux-arm64
             tarball: prompt-guard-linux-arm64.tar.gz
+            bottle_tags: "aarch64_linux"
           - goos: linux
             goarch: amd64
             asset: prompt-guard-linux-amd64
             tarball: prompt-guard-linux-amd64.tar.gz
+            bottle_tags: "x86_64_linux"
           - goos: windows
             goarch: amd64
             asset: prompt-guard-windows-amd64.exe
             tarball: ""
+            bottle_tags: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -68,13 +73,28 @@ jobs:
           CGO_ENABLED: 0
         run: go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.asset }} .
 
-      - name: Package (macOS / Linux)
+      - name: Package source tarball (macOS / Linux)
         if: matrix.tarball != ''
         run: |
           cp ${{ matrix.asset }} prompt-guard
           tar czf ${{ matrix.tarball }} prompt-guard
           sha256sum ${{ matrix.tarball }} > ${{ matrix.tarball }}.sha256
           rm prompt-guard
+
+      - name: Create Homebrew bottles (macOS / Linux)
+        if: matrix.bottle_tags != ''
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VER="${VERSION#v}"
+          for tag in ${{ matrix.bottle_tags }}; do
+            mkdir -p "btl/prompt-guard/${VER}/bin"
+            cp ${{ matrix.asset }} "btl/prompt-guard/${VER}/bin/prompt-guard"
+            BOTTLE="prompt-guard--${VER}.${tag}.bottle.tar.gz"
+            tar czf "${BOTTLE}" -C btl prompt-guard
+            sha256sum "${BOTTLE}" > "${BOTTLE}.sha256"
+            rm -rf btl
+          done
 
       - name: Checksum (Windows)
         if: matrix.tarball == ''
@@ -87,6 +107,8 @@ jobs:
           path: |
             ${{ matrix.tarball }}
             ${{ matrix.tarball }}.sha256
+            prompt-guard--*.bottle.tar.gz
+            prompt-guard--*.bottle.tar.gz.sha256
 
       - uses: actions/upload-artifact@v4
         if: matrix.tarball == ''
@@ -111,6 +133,8 @@ jobs:
           files: |
             prompt-guard-*.tar.gz
             prompt-guard-*.tar.gz.sha256
+            prompt-guard--*.bottle.tar.gz
+            prompt-guard--*.bottle.tar.gz.sha256
             prompt-guard-windows-amd64.exe
             prompt-guard-windows-amd64.exe.sha256
           generate_release_notes: true
@@ -128,10 +152,30 @@ jobs:
       - name: Compute SHA256s
         id: shas
         run: |
-          echo "arm64=$(cat prompt-guard-darwin-arm64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
-          echo "amd64=$(cat prompt-guard-darwin-amd64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
-          echo "linux_arm64=$(cat prompt-guard-linux-arm64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
-          echo "linux_amd64=$(cat prompt-guard-linux-amd64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "arm64=$(awk '{print $1}' prompt-guard-darwin-arm64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+          echo "amd64=$(awk '{print $1}' prompt-guard-darwin-amd64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+          echo "linux_arm64=$(awk '{print $1}' prompt-guard-linux-arm64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+          echo "linux_amd64=$(awk '{print $1}' prompt-guard-linux-amd64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+
+      - name: Build bottle sha256 lines
+        id: bottles
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VER="${VERSION#v}"
+          LINES=""
+          for f in prompt-guard--${VER}.*.bottle.tar.gz.sha256; do
+            [ -f "$f" ] || continue
+            sha=$(awk '{print $1}' "$f")
+            tag=$(echo "$f" | sed "s/prompt-guard--${VER}\.\(.*\)\.bottle\.tar\.gz\.sha256/\1/")
+            LINES="${LINES}      sha256 cellar: :any_skip_relocation, ${tag}: \"${sha}\"\n"
+          done
+          # Store as multiline output
+          {
+            echo "lines<<EOF"
+            printf "%b" "$LINES"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Checkout tap
         uses: actions/checkout@v4
@@ -147,14 +191,22 @@ jobs:
           SHA_DARWIN_AMD64: ${{ steps.shas.outputs.amd64 }}
           SHA_LINUX_ARM64: ${{ steps.shas.outputs.linux_arm64 }}
           SHA_LINUX_AMD64: ${{ steps.shas.outputs.linux_amd64 }}
+          BOTTLE_LINES: ${{ steps.bottles.outputs.lines }}
         run: |
-          cat > homebrew-tap/Formula/prompt-guard.rb << EOF
+          VER="${VERSION#v}"
+          cat > homebrew-tap/Formula/prompt-guard.rb << FORMULA
           class PromptGuard < Formula
             desc "Local HTTPS MITM proxy that inspects, redacts, or blocks sensitive data sent to AI coding assistants"
             homepage "https://github.com/chaudharydeepak/prompt-guard"
-            version "${VERSION#v}"
+            version "${VER}"
             license "MIT"
 
+            # Bottles are pre-built binaries — no compiler or Xcode CLT required.
+            bottle do
+              root_url "https://github.com/chaudharydeepak/prompt-guard/releases/download/${VERSION}"
+          ${BOTTLE_LINES}    end
+
+            # Fallback source build for OS versions not covered by a bottle.
             on_macos do
               if Hardware::CPU.arm?
                 url "https://github.com/chaudharydeepak/prompt-guard/releases/download/${VERSION}/prompt-guard-darwin-arm64.tar.gz"
@@ -222,7 +274,7 @@ jobs:
               assert_match version.to_s, shell_output("#{bin}/prompt-guard --version")
             end
           end
-          EOF
+          FORMULA
 
       - name: Commit and push
         working-directory: homebrew-tap
