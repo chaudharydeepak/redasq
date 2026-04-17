@@ -87,7 +87,7 @@ export NO_PROXY=localhost,127.0.0.1
 source ~/.zshrc
 ```
 
-This is sufficient for pure Go / native CLI tools. Node.js and Electron-based tools (Claude Code, Copilot CLI) also need the CA cert — see below.
+This is sufficient for pure Go / native CLI tools. Claude Code additionally needs `NODE_EXTRA_CA_CERTS`; Copilot CLI and browsers need the system CA cert — see below.
 
 ### 3. Open the dashboard
 
@@ -99,30 +99,17 @@ http://localhost:7778
 
 ## Client notes
 
-### Claude Code / Copilot CLI
+### Claude Code
 
-Both are Node.js / Electron-based and perform their own TLS verification. Add this alongside the proxy vars:
+Node.js-based. Add this alongside the proxy vars — no system keychain change needed:
 
 ```bash
 export NODE_EXTRA_CA_CERTS=~/.prompt-guard/ca.crt
 ```
 
-This scopes cert trust to Node.js processes only — no system keychain change needed.
+### Copilot CLI
 
-### VS Code Copilot
-
-In VS Code settings (`Cmd+,`):
-
-```json
-"http.proxy": "http://localhost:8080",
-"http.proxyStrictSSL": false
-```
-
-Restart VS Code.
-
-### CA cert (browser inspection only)
-
-CLI tools work without trusting the CA cert. Only needed for Chrome / Safari.
+Electron-based (uses Chromium's cert store). Requires the CA cert to be installed system-wide:
 
 **macOS:**
 ```bash
@@ -135,6 +122,21 @@ sudo security add-trusted-cert -d -r trustRoot \
 sudo cp ~/.prompt-guard/ca.crt /usr/local/share/ca-certificates/prompt-guard.crt
 sudo update-ca-certificates
 ```
+
+### VS Code Copilot
+
+In VS Code settings (`Cmd+,`):
+
+```json
+"http.proxy": "http://localhost:8080",
+"http.proxyStrictSSL": false
+```
+
+Restart VS Code.
+
+### CA cert (Chrome / Safari)
+
+Same system-wide install as Copilot CLI above — use the same commands.
 
 ---
 
