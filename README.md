@@ -87,7 +87,7 @@ export NO_PROXY=localhost,127.0.0.1
 source ~/.zshrc
 ```
 
-This is all that's needed for CLI tools — **no CA cert required**.
+This is sufficient for pure Go / native CLI tools. Node.js and Electron-based tools (Claude Code, Copilot CLI) also need the CA cert — see below.
 
 ### 3. Open the dashboard
 
@@ -99,15 +99,15 @@ http://localhost:7778
 
 ## Client notes
 
-### Claude Code
+### Claude Code / Copilot CLI
 
-Claude Code (v2.1.84+) performs its own TLS verification via Node.js. Add one extra variable so it trusts the proxy cert:
+Both are Node.js / Electron-based and perform their own TLS verification. Add this alongside the proxy vars:
 
 ```bash
 export NODE_EXTRA_CA_CERTS=~/.prompt-guard/ca.crt
 ```
 
-This scopes trust to Node.js only — no system keychain change needed.
+This scopes cert trust to Node.js processes only — no system keychain change needed.
 
 ### VS Code Copilot
 
