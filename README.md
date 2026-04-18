@@ -2,11 +2,25 @@
   <img src="logo.svg" width="120" alt="Prompt Guard">
 </p>
 
+<p align="center">
+  <a href="#why">Why</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#setup">Setup</a> ·
+  <a href="#client-notes">Client notes</a> ·
+  <a href="#rules">Rules</a> ·
+  <a href="#agent-mode">Agent mode</a> ·
+  <a href="#options">Options</a> ·
+  <a href="#architecture">Architecture</a>
+</p>
+
 # Prompt Guard
 
 A local HTTPS proxy that intercepts every prompt sent to AI coding assistants — blocking or redacting sensitive data before it reaches the model.
 
 ![Prompt Guard demo](demo.gif)
+
+---
 
 ## Why
 
@@ -87,7 +101,7 @@ export NO_PROXY=localhost,127.0.0.1
 source ~/.zshrc
 ```
 
-This is all that's needed for CLI tools — **no CA cert required**.
+This is sufficient for pure Go / native CLI tools. Claude Code additionally needs `NODE_EXTRA_CA_CERTS`; Copilot CLI and browsers need the system CA cert — see below.
 
 ### 3. Open the dashboard
 
@@ -101,28 +115,15 @@ http://localhost:7778
 
 ### Claude Code
 
-Claude Code (v2.1.84+) performs its own TLS verification via Node.js. Add one extra variable so it trusts the proxy cert:
+Node.js-based. Add this alongside the proxy vars — no system keychain change needed:
 
 ```bash
 export NODE_EXTRA_CA_CERTS=~/.prompt-guard/ca.crt
 ```
 
-This scopes trust to Node.js only — no system keychain change needed.
+### Copilot CLI
 
-### VS Code Copilot
-
-In VS Code settings (`Cmd+,`):
-
-```json
-"http.proxy": "http://localhost:8080",
-"http.proxyStrictSSL": false
-```
-
-Restart VS Code.
-
-### CA cert (browser inspection only)
-
-CLI tools work without trusting the CA cert. Only needed for Chrome / Safari.
+Electron-based (uses Chromium's cert store). Requires the CA cert to be installed system-wide:
 
 **macOS:**
 ```bash
@@ -135,6 +136,21 @@ sudo security add-trusted-cert -d -r trustRoot \
 sudo cp ~/.prompt-guard/ca.crt /usr/local/share/ca-certificates/prompt-guard.crt
 sudo update-ca-certificates
 ```
+
+### VS Code Copilot
+
+In VS Code settings (`Cmd+,`):
+
+```json
+"http.proxy": "http://localhost:8080",
+"http.proxyStrictSSL": false
+```
+
+Restart VS Code.
+
+### CA cert (Chrome / Safari)
+
+Same system-wide install as Copilot CLI above — use the same commands.
 
 ---
 
