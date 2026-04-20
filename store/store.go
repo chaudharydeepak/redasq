@@ -36,7 +36,7 @@ type Prompt struct {
 	SessionID      string
 	Client         string
 	Model          string
-	LLMResponse    string // stored only when status=redacted, capped at 2KB
+	LLMResponse    string // stored when status=redacted; full text, no truncation
 }
 
 type Store struct {

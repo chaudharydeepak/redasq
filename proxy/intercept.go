@@ -8,81 +8,115 @@ import (
 
 var xmlTagRe = regexp.MustCompile(`<[^>]+>`)
 
-// IsStreaming reports whether the request body uses SSE streaming.
-func IsStreaming(body []byte) bool {
-	var req struct {
-		Stream bool `json:"stream"`
-	}
-	json.Unmarshal(body, &req)
-	return req.Stream
+// Request holds all fields derived from a single LLM API request body.
+// Call ParseRequest once per intercepted request instead of calling individual
+// Extract* functions — each previously unmarshalled the full body independently.
+type Request struct {
+	Model      string   // "model" field from request body
+	Streaming  bool     // true when stream:true
+	SessionID  string   // Anthropic session ID from metadata.user_id
+	Prompts    []string // inspectable text, current turn only (for rule matching)
+	UserQuery  string   // user's typed message only (for dashboard display)
+	Background bool     // Copilot internal call (title / summary) — never block
 }
 
-// ExtractPrompts returns the inspectable text from the current turn of an
-// OpenAI (/v1/chat/completions) or Anthropic (/v1/messages) request.
-//
-// "Current turn" = all content after the last assistant message. This avoids
-// re-flagging conversation history on every subsequent request.
-//
-// Both formats share the messages array structure. Key differences handled:
-//   - Anthropic has a top-level "system" field (not a message role)
-//   - Anthropic content blocks use tool_result with nested content arrays
-//   - Copilot injects XML context into message content — stripped before returning
-func ExtractPrompts(body []byte) []string {
+// ParseRequest parses a request body once and populates all fields in a single
+// pass. Handles Anthropic /v1/messages, OpenAI /v1/chat/completions, and the
+// OpenAI Responses API /responses format.
+func ParseRequest(body []byte) *Request {
+	r := &Request{}
 	if len(body) == 0 {
-		return nil
+		return r
 	}
 
-	var envelope struct {
-		// Anthropic /v1/messages
+	var env struct {
+		Model    string          `json:"model"`
+		Stream   bool            `json:"stream"`
 		System   json.RawMessage `json:"system"`
 		Messages []struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
 		} `json:"messages"`
-		// OpenAI Responses API /responses
-		InputRaw     json.RawMessage `json:"input"`
+		Metadata struct {
+			UserID string `json:"user_id"`
+		} `json:"metadata"`
+		Input        json.RawMessage `json:"input"`
 		Instructions string          `json:"instructions"`
-		// Legacy
-		Prompt string `json:"prompt"`
+		Prompt       string          `json:"prompt"`
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil
+	if err := json.Unmarshal(body, &env); err != nil {
+		return r
 	}
 
-	// Find the last assistant message. Everything after it is the current turn.
-	lastAssistant := -1
-	for i := len(envelope.Messages) - 1; i >= 0; i-- {
-		if envelope.Messages[i].Role == "assistant" {
-			lastAssistant = i
-			break
+	r.Model = env.Model
+	r.Streaming = env.Stream
+
+	// Anthropic embeds session_id as a JSON-encoded string inside metadata.user_id.
+	if env.Metadata.UserID != "" {
+		var inner struct {
+			SessionID string `json:"session_id"`
+		}
+		json.Unmarshal([]byte(env.Metadata.UserID), &inner)
+		r.SessionID = inner.SessionID
+	}
+
+	var rawTexts []string
+	var queryParts []string
+
+	// System prompt (Anthropic) — always inspect. Clients like Copilot refresh it
+	// on every request with current file context, so secrets can appear at any turn.
+	if len(env.System) > 0 {
+		rawTexts = append(rawTexts, extractContentText(env.System)...)
+	}
+
+	// Messages array (Anthropic /v1/messages + OpenAI /v1/chat/completions).
+	if len(env.Messages) > 0 {
+		// Inspect only the current turn — everything after the last assistant message.
+		// Re-inspecting full history on every turn would re-flag the same value on
+		// every subsequent request.
+		lastAsst := -1
+		for i := len(env.Messages) - 1; i >= 0; i-- {
+			if env.Messages[i].Role == "assistant" {
+				lastAsst = i
+				break
+			}
+		}
+		for i := lastAsst + 1; i < len(env.Messages); i++ {
+			msg := env.Messages[i]
+			rawTexts = append(rawTexts, extractContentText(msg.Content)...)
+			if msg.Role == "user" {
+				if q := userQueryFromContent(msg.Content); q != "" {
+					queryParts = append(queryParts, q)
+				}
+				// Copilot background detection: internal calls (title generation,
+				// summarization, progress) use plain string content with known prefixes.
+				var s string
+				if json.Unmarshal(msg.Content, &s) == nil {
+					t := strings.TrimSpace(s)
+					if strings.HasPrefix(t, "Summarize the following") ||
+						strings.HasPrefix(t, "Please write a brief title") ||
+						strings.HasPrefix(t, "Please generate exactly") {
+						r.Background = true
+					}
+				}
+			}
 		}
 	}
 
-	var raw []string
-
-	// Always scan the system prompt — Copilot and other clients refresh it on
-	// every request with current file context, so secrets can appear in it on
-	// any turn, not just the first.
-	if len(envelope.System) > 0 {
-		raw = append(raw, extractContentText(envelope.System)...)
-	}
-
-	// Current turn: all messages after the last assistant message.
-	for i := lastAssistant + 1; i < len(envelope.Messages); i++ {
-		raw = append(raw, extractContentText(envelope.Messages[i].Content)...)
-	}
-
-	// OpenAI Responses API: input is a string or array of message items.
-	if len(envelope.InputRaw) > 0 {
+	// OpenAI Responses API: input is either a plain string or an array of items.
+	if len(env.Input) > 0 {
 		var inputStr string
-		if json.Unmarshal(envelope.InputRaw, &inputStr) == nil {
-			if envelope.Instructions != "" {
-				raw = append(raw, envelope.Instructions)
+		if json.Unmarshal(env.Input, &inputStr) == nil {
+			// Plain string input.
+			if env.Instructions != "" {
+				rawTexts = append(rawTexts, env.Instructions)
 			}
 			if inputStr != "" {
-				raw = append(raw, inputStr)
+				rawTexts = append(rawTexts, inputStr)
+				queryParts = append(queryParts, userQueryFromString(inputStr))
 			}
 		} else {
+			// Array of input items.
 			var items []struct {
 				Role    string `json:"role"`
 				Type    string `json:"type"`   // "function_call" | "function_call_output"
@@ -92,32 +126,49 @@ func ExtractPrompts(body []byte) []string {
 					Text string `json:"text"`
 				} `json:"content"`
 			}
-			if json.Unmarshal(envelope.InputRaw, &items) == nil {
-				// Treat both role=assistant messages and function_call items as
-				// assistant turns when finding the current-turn boundary.
-				lastAsst := -1
+			if json.Unmarshal(env.Input, &items) == nil {
+				// For inspection: treat both assistant messages and function_call items
+				// as the assistant turn boundary.
+				lastAsstPrompt := -1
 				for i := len(items) - 1; i >= 0; i-- {
 					if items[i].Role == "assistant" || items[i].Type == "function_call" {
-						lastAsst = i
+						lastAsstPrompt = i
 						break
 					}
 				}
-				// Always scan instructions — Copilot CLI refreshes file context here
-				// on every request, not just the first turn.
-				if envelope.Instructions != "" {
-					raw = append(raw, envelope.Instructions)
-				}
-				for i := lastAsst + 1; i < len(items); i++ {
-					// function_call_output: tool result that may contain file contents.
-					if items[i].Type == "function_call_output" {
-						if t := strings.TrimSpace(items[i].Output); t != "" {
-							raw = append(raw, t)
-						}
-						continue
+				// For display: only role==assistant marks the turn boundary.
+				lastAsstQuery := -1
+				for i := len(items) - 1; i >= 0; i-- {
+					if items[i].Role == "assistant" {
+						lastAsstQuery = i
+						break
 					}
-					for _, c := range items[i].Content {
-						if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
-							raw = append(raw, strings.TrimSpace(c.Text))
+				}
+
+				// Instructions are always inspected (Copilot CLI refreshes file context here).
+				if env.Instructions != "" {
+					rawTexts = append(rawTexts, env.Instructions)
+				}
+
+				for i, item := range items {
+					if i > lastAsstPrompt {
+						if item.Type == "function_call_output" {
+							if t := strings.TrimSpace(item.Output); t != "" {
+								rawTexts = append(rawTexts, t)
+							}
+						} else {
+							for _, c := range item.Content {
+								if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
+									rawTexts = append(rawTexts, strings.TrimSpace(c.Text))
+								}
+							}
+						}
+					}
+					if i > lastAsstQuery && item.Role == "user" {
+						for _, c := range item.Content {
+							if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
+								queryParts = append(queryParts, userQueryFromString(c.Text))
+							}
 						}
 					}
 				}
@@ -125,13 +176,30 @@ func ExtractPrompts(body []byte) []string {
 		}
 	}
 
-	// Legacy top-level field.
-	if envelope.Prompt != "" {
-		raw = append(raw, envelope.Prompt)
+	// Legacy top-level prompt field.
+	if env.Prompt != "" {
+		rawTexts = append(rawTexts, env.Prompt)
 	}
 
-	return cleanTexts(raw)
+	r.Prompts = cleanTexts(rawTexts)
+
+	if len(queryParts) > 0 {
+		r.UserQuery = strings.Join(queryParts, "\n\n")
+	} else if env.Prompt != "" {
+		r.UserQuery = env.Prompt
+	}
+
+	return r
 }
+
+// ── Compatibility wrappers ────────────────────────────────────────────────────
+// These exist so existing tests keep compiling. Prefer ParseRequest for new code.
+
+func ExtractPrompts(body []byte) []string { return ParseRequest(body).Prompts }
+func ExtractUserQuery(body []byte) string  { return ParseRequest(body).UserQuery }
+func IsStreaming(body []byte) bool         { return ParseRequest(body).Streaming }
+
+// ── Private helpers ───────────────────────────────────────────────────────────
 
 // extractContentText recursively pulls plain text out of a content field.
 //
@@ -201,89 +269,6 @@ func cleanTexts(texts []string) []string {
 	return out
 }
 
-// ExtractUserQuery returns only the user's actual typed message from the current
-// turn — suitable for display in the dashboard. Unlike ExtractPrompts it does not
-// include injected file context or system instructions.
-//
-// For Copilot's XML-wrapped format, the <user_query> tag is preferred.
-// For plain OpenAI / Anthropic requests the user message text is returned as-is.
-func ExtractUserQuery(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-
-	var envelope struct {
-		Messages []struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
-		InputRaw json.RawMessage `json:"input"`
-		Prompt   string          `json:"prompt"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return ""
-	}
-
-	// Find the last assistant message — current turn is everything after it.
-	lastAssistant := -1
-	for i := len(envelope.Messages) - 1; i >= 0; i-- {
-		if envelope.Messages[i].Role == "assistant" {
-			lastAssistant = i
-			break
-		}
-	}
-
-	var parts []string
-	for i := lastAssistant + 1; i < len(envelope.Messages); i++ {
-		if envelope.Messages[i].Role != "user" {
-			continue
-		}
-		if t := userQueryFromContent(envelope.Messages[i].Content); t != "" {
-			parts = append(parts, t)
-		}
-	}
-
-	if len(parts) == 0 {
-		if envelope.Prompt != "" {
-			return envelope.Prompt
-		}
-		// OpenAI Responses API input field.
-		if len(envelope.InputRaw) > 0 {
-			var inputStr string
-			if json.Unmarshal(envelope.InputRaw, &inputStr) == nil {
-				return userQueryFromString(inputStr)
-			}
-			var items []struct {
-				Role    string `json:"role"`
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
-			}
-			if json.Unmarshal(envelope.InputRaw, &items) == nil {
-				lastAsst := -1
-				for i := len(items) - 1; i >= 0; i-- {
-					if items[i].Role == "assistant" {
-						lastAsst = i
-						break
-					}
-				}
-				for i := lastAsst + 1; i < len(items); i++ {
-					if items[i].Role != "user" {
-						continue
-					}
-					for _, c := range items[i].Content {
-						if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
-							parts = append(parts, userQueryFromString(c.Text))
-						}
-					}
-				}
-			}
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
 // userQueryFromContent extracts the display-worthy user text from a content field.
 // Prefers <user_query> tag (Copilot), then falls back to stripping XML.
 func userQueryFromContent(raw json.RawMessage) string {
@@ -313,7 +298,7 @@ func userQueryFromContent(raw json.RawMessage) string {
 		}
 	}
 
-	// No <user_query> tag found — strip XML from all blocks and join.
+	// No <user_query> tag — strip XML from all text blocks and join.
 	var parts []string
 	for _, b := range blocks {
 		if b.Type == "text" {
@@ -338,6 +323,17 @@ func extractUserQueryTag(s string) string {
 	return ""
 }
 
+// userQueryFromString extracts the user message from a string content field.
+// Uses <user_query> tag when present (Copilot format); otherwise strips XML tags.
+func userQueryFromString(s string) string {
+	if t := extractUserQueryTag(s); t != "" {
+		return t
+	}
+	return strings.Join(strings.Fields(xmlTagRe.ReplaceAllString(s, " ")), " ")
+}
+
+// ── Response-side functions ───────────────────────────────────────────────────
+
 // ExtractUsage parses input/output token counts from a response body.
 // Handles Anthropic and OpenAI formats for both plain JSON and SSE streams.
 func ExtractUsage(body []byte) (inputTokens, outputTokens int) {
@@ -360,18 +356,12 @@ func ExtractUsage(body []byte) (inputTokens, outputTokens int) {
 		} `json:"response"`
 	}
 
-	// Scan each line — works for both plain JSON and SSE (data: {...}).
-	// Fresh struct per line so stale pointer fields from prior iterations don't bleed through.
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimPrefix(strings.TrimSpace(line), "data: ")
-		if line == "" || line == "[DONE]" {
-			continue
-		}
+	for _, line := range sseLines(body) {
 		var s lineShape
 		if err := json.Unmarshal([]byte(line), &s); err != nil {
 			continue
 		}
-		// Anthropic message_start: usage nested under message
+		// Anthropic message_start: usage nested under message.
 		if s.Message != nil && s.Message.Usage != nil {
 			u := s.Message.Usage
 			if total := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens; total > inputTokens {
@@ -380,14 +370,12 @@ func ExtractUsage(body []byte) (inputTokens, outputTokens int) {
 		}
 		if s.Usage != nil {
 			u := s.Usage
-			// Anthropic top-level usage (message_delta has output_tokens; non-streaming has both)
 			if total := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens; total > inputTokens {
 				inputTokens = total
 			}
 			if u.OutputTokens > outputTokens {
 				outputTokens = u.OutputTokens
 			}
-			// OpenAI / Copilot
 			if u.PromptTokens > inputTokens {
 				inputTokens = u.PromptTokens
 			}
@@ -395,7 +383,7 @@ func ExtractUsage(body []byte) (inputTokens, outputTokens int) {
 				outputTokens = u.CompletionTokens
 			}
 		}
-		// OpenAI Responses API: response.completed event has usage nested under response
+		// OpenAI Responses API: usage nested under response.
 		if s.Response != nil && s.Response.Usage != nil {
 			u := s.Response.Usage
 			if u.InputTokens > inputTokens {
@@ -411,133 +399,161 @@ func ExtractUsage(body []byte) (inputTokens, outputTokens int) {
 
 // ExtractResponseText pulls plain text from an LLM response body.
 // Handles Anthropic and OpenAI SSE streams as well as plain JSON responses.
-// Returns the assembled text content, capped at 2KB.
+// Captures both text content and tool calls (formatted as [Tool: name]\n<input>).
+// Returns the full assembled text — no truncation.
 func ExtractResponseText(body []byte) string {
-	const maxLen = 2048
 	var out strings.Builder
 
 	// Try plain JSON first (non-streaming response).
 	var plain struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Name  string          `json:"name"`  // tool_use
+			Input json.RawMessage `json:"input"` // tool_use
 		} `json:"content"`
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
 	if json.Unmarshal(body, &plain) == nil {
-		// Anthropic non-streaming
 		for _, c := range plain.Content {
-			if c.Type == "text" {
+			switch c.Type {
+			case "text":
 				out.WriteString(c.Text)
+			case "tool_use":
+				if out.Len() > 0 {
+					out.WriteString("\n")
+				}
+				out.WriteString("[Tool: " + c.Name + "]\n")
+				if len(c.Input) > 0 && string(c.Input) != "null" {
+					out.Write(c.Input)
+					out.WriteString("\n")
+				}
 			}
 		}
-		// OpenAI non-streaming
 		for _, c := range plain.Choices {
 			out.WriteString(c.Message.Content)
+			for _, tc := range c.Message.ToolCalls {
+				if out.Len() > 0 {
+					out.WriteString("\n")
+				}
+				out.WriteString("[Tool: " + tc.Function.Name + "]\n")
+				if tc.Function.Arguments != "" {
+					out.WriteString(tc.Function.Arguments + "\n")
+				}
+			}
 		}
 		if out.Len() > 0 {
-			s := out.String()
-			if len(s) > maxLen {
-				s = s[:maxLen]
-			}
-			return s
+			return out.String()
 		}
 	}
 
-	// SSE stream — scan each data: line for text deltas.
-	// Use RawMessage for delta so a string value (Responses API) doesn't abort
-	// unmarshaling the whole line when the struct expects an object (Anthropic).
-	type deltaLine struct {
-		Type    string          `json:"type"`
-		Delta   json.RawMessage `json:"delta"` // string (Responses API) or object (Anthropic)
+	// SSE stream — scan each data: line.
+	// toolNames/toolInputs track in-flight tool_use blocks by index (Anthropic streaming).
+	toolNames  := map[int]string{}
+	toolInputs := map[int]*strings.Builder{}
+	type sseEvent struct {
+		Type  string `json:"type"`
+		Index int    `json:"index"`
+		ContentBlock struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		} `json:"content_block"`
+		Delta   json.RawMessage `json:"delta"`
 		Choices []struct {
 			Delta struct {
-				Content string `json:"content"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"delta"`
 		} `json:"choices"`
 	}
-	for _, line := range strings.Split(string(body), "\n") {
+	for _, line := range sseLines(body) {
+		var ev sseEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "content_block_start":
+			if ev.ContentBlock.Type == "tool_use" {
+				toolNames[ev.Index] = ev.ContentBlock.Name
+				toolInputs[ev.Index] = &strings.Builder{}
+			}
+		case "content_block_delta":
+			if len(ev.Delta) > 0 && ev.Delta[0] == '{' {
+				var obj struct {
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					PartialJSON string `json:"partial_json"`
+				}
+				if json.Unmarshal(ev.Delta, &obj) == nil {
+					switch obj.Type {
+					case "text_delta":
+						out.WriteString(obj.Text)
+					case "input_json_delta":
+						if b, ok := toolInputs[ev.Index]; ok {
+							b.WriteString(obj.PartialJSON)
+						}
+					}
+				}
+			}
+		case "content_block_stop":
+			if name, ok := toolNames[ev.Index]; ok {
+				if out.Len() > 0 {
+					out.WriteString("\n")
+				}
+				out.WriteString("[Tool: " + name + "]\n")
+				if b, ok2 := toolInputs[ev.Index]; ok2 && b.Len() > 0 {
+					out.WriteString(b.String() + "\n")
+				}
+				delete(toolNames, ev.Index)
+				delete(toolInputs, ev.Index)
+			}
+		}
+		// OpenAI Responses API: delta is a plain string.
+		if ev.Type == "response.output_text.delta" || ev.Type == "response.text.delta" {
+			var s string
+			if json.Unmarshal(ev.Delta, &s) == nil && s != "" {
+				out.WriteString(s)
+			}
+		}
+		// OpenAI chat.completions streaming.
+		for _, c := range ev.Choices {
+			out.WriteString(c.Delta.Content)
+			for _, tc := range c.Delta.ToolCalls {
+				out.WriteString(tc.Function.Arguments)
+			}
+		}
+	}
+
+	return out.String()
+}
+
+// sseLines splits a response body into parseable JSON lines, stripping
+// SSE framing ("data: " prefix, blank lines, "[DONE]" sentinels).
+// Works for both plain JSON responses and SSE streams.
+func sseLines(body []byte) []string {
+	raw := strings.Split(string(body), "\n")
+	out := make([]string, 0, len(raw))
+	for _, line := range raw {
 		line = strings.TrimPrefix(strings.TrimSpace(line), "data: ")
 		if line == "" || line == "[DONE]" {
 			continue
 		}
-		var dl deltaLine
-		if err := json.Unmarshal([]byte(line), &dl); err != nil {
-			continue
-		}
-		// OpenAI Responses API: delta is a plain string
-		if dl.Type == "response.output_text.delta" || dl.Type == "response.text.delta" {
-			var s string
-			if json.Unmarshal(dl.Delta, &s) == nil && s != "" {
-				out.WriteString(s)
-			}
-		}
-		// Anthropic content_block_delta: delta is {"type":"text_delta","text":"..."}
-		if len(dl.Delta) > 0 && dl.Delta[0] == '{' {
-			var obj struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			}
-			if json.Unmarshal(dl.Delta, &obj) == nil && obj.Type == "text_delta" {
-				out.WriteString(obj.Text)
-			}
-		}
-		// OpenAI chat.completions
-		for _, c := range dl.Choices {
-			out.WriteString(c.Delta.Content)
-		}
-		if out.Len() >= maxLen {
-			break
-		}
+		out = append(out, line)
 	}
-
-	s := out.String()
-	if len(s) > maxLen {
-		s = s[:maxLen]
-	}
-	return s
-}
-
-
-// ExtractModel returns the model name from an OpenAI or Anthropic request body.
-func ExtractModel(body []byte) string {
-	var req struct {
-		Model string `json:"model"`
-	}
-	json.Unmarshal(body, &req)
-	return req.Model
-}
-
-// ExtractAnthropicSessionID pulls the session_id from the metadata.user_id field
-// that Claude Code embeds in every /v1/messages request body.
-// The user_id field is a JSON-encoded string: {"device_id":"...","session_id":"..."}
-func ExtractAnthropicSessionID(body []byte) string {
-	var env struct {
-		Metadata struct {
-			UserID string `json:"user_id"`
-		} `json:"metadata"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil || env.Metadata.UserID == "" {
-		return ""
-	}
-	var inner struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal([]byte(env.Metadata.UserID), &inner); err != nil {
-		return ""
-	}
-	return inner.SessionID
-}
-
-// userQueryFromString extracts the user message from a string content field.
-// Uses <user_query> tag when present (Copilot format); otherwise strips XML tags.
-func userQueryFromString(s string) string {
-	if t := extractUserQueryTag(s); t != "" {
-		return t
-	}
-	return strings.Join(strings.Fields(xmlTagRe.ReplaceAllString(s, " ")), " ")
+	return out
 }

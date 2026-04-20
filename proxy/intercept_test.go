@@ -591,3 +591,245 @@ func TestIsStreaming(t *testing.T) {
 		t.Error("expected streaming=false when field absent")
 	}
 }
+
+// ── ParseRequest ──────────────────────────────────────────────────────────────
+
+func TestParseRequest_Model(t *testing.T) {
+	r := ParseRequest([]byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[]}`))
+	if r.Model != "claude-sonnet-4-6" {
+		t.Errorf("model: want claude-sonnet-4-6, got %q", r.Model)
+	}
+	if !r.Streaming {
+		t.Error("expected Streaming=true")
+	}
+}
+
+func TestParseRequest_SessionID(t *testing.T) {
+	body := `{"metadata":{"user_id":"{\"device_id\":\"d1\",\"session_id\":\"sess-abc\"}"},"messages":[]}`
+	r := ParseRequest([]byte(body))
+	if r.SessionID != "sess-abc" {
+		t.Errorf("session_id: want sess-abc, got %q", r.SessionID)
+	}
+}
+
+func TestParseRequest_Background_Summarize(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"Summarize the following conversation for context"}]}`
+	r := ParseRequest([]byte(body))
+	if !r.Background {
+		t.Error("expected Background=true for summarize prompt")
+	}
+}
+
+func TestParseRequest_Background_Title(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"Please write a brief title for this conversation"}]}`
+	r := ParseRequest([]byte(body))
+	if !r.Background {
+		t.Error("expected Background=true for title prompt")
+	}
+}
+
+func TestParseRequest_Background_False(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"what is the capital of France?"}]}`
+	r := ParseRequest([]byte(body))
+	if r.Background {
+		t.Error("expected Background=false for normal user message")
+	}
+}
+
+func TestParseRequest_Empty(t *testing.T) {
+	r := ParseRequest(nil)
+	if r.Model != "" || r.Streaming || r.SessionID != "" || len(r.Prompts) != 0 {
+		t.Error("empty body should produce zero-value Request")
+	}
+}
+
+// ── Claude Code (Anthropic /v1/messages) ─────────────────────────────────────
+
+func TestParseRequest_ClaudeCode_FullRequest(t *testing.T) {
+	// Typical Claude Code request: system prompt, multi-turn history, current user turn.
+	body := `{
+		"model": "claude-sonnet-4-6",
+		"stream": true,
+		"system": "You are Claude Code, a coding assistant.",
+		"metadata": {"user_id": "{\"device_id\":\"dev1\",\"session_id\":\"sess-cc-1\"}"},
+		"messages": [
+			{"role": "user",      "content": "hello"},
+			{"role": "assistant", "content": "Hi! How can I help?"},
+			{"role": "user",      "content": "read my config file please"}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if r.Model != "claude-sonnet-4-6" {
+		t.Errorf("model: got %q", r.Model)
+	}
+	if !r.Streaming {
+		t.Error("expected Streaming=true")
+	}
+	if r.SessionID != "sess-cc-1" {
+		t.Errorf("session_id: got %q", r.SessionID)
+	}
+	// System prompt always included in prompts.
+	if !containsAll(r.Prompts, "You are Claude Code") {
+		t.Errorf("system prompt missing from prompts: %v", r.Prompts)
+	}
+	// Current turn: only the last user message.
+	if !containsAll(r.Prompts, "read my config file please") {
+		t.Errorf("current turn missing: %v", r.Prompts)
+	}
+	// History should not be re-inspected.
+	if !containsNone(r.Prompts, "hello", "Hi! How can I help?") {
+		t.Errorf("history should not be in prompts: %v", r.Prompts)
+	}
+	if r.UserQuery != "read my config file please" {
+		t.Errorf("user query: got %q", r.UserQuery)
+	}
+	if r.Background {
+		t.Error("Claude Code request should not be Background")
+	}
+}
+
+func TestParseRequest_ClaudeCode_ToolResult(t *testing.T) {
+	// Claude Code sending a tool_result back after a read_file call.
+	body := `{
+		"model": "claude-sonnet-4-6",
+		"stream": true,
+		"system": "You are Claude Code.",
+		"messages": [
+			{"role": "user",      "content": "read server.go"},
+			{"role": "assistant", "content": [{"type": "tool_use", "id": "tu1", "name": "read_file", "input": {"path": "server.go"}}]},
+			{"role": "user",      "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "package main\n// secret_key = tok-live-abc123"}]}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	// Tool result content must be inspectable — that's where secrets can leak.
+	if !containsAll(r.Prompts, "secret_key") {
+		t.Errorf("tool result content not in prompts: %v", r.Prompts)
+	}
+	// The tool_use block in history should not be re-inspected.
+	if !containsNone(r.Prompts, "read server.go") {
+		t.Errorf("prior user message should not be in prompts: %v", r.Prompts)
+	}
+}
+
+// ── VS Code Copilot (OpenAI /v1/chat/completions, XML-wrapped) ───────────────
+
+func TestParseRequest_VSCodeCopilot_UserQueryTag(t *testing.T) {
+	// VS Code Copilot wraps context in XML; user's typed message is in <user_query>.
+	body := `{
+		"model": "gpt-4o",
+		"stream": true,
+		"messages": [
+			{"role": "system", "content": "You are a coding assistant."},
+			{"role": "user",   "content": "<context><file>main.go</file></context><user_query>explain this function</user_query>"}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if r.UserQuery != "explain this function" {
+		t.Errorf("user query: want 'explain this function', got %q", r.UserQuery)
+	}
+	// Full context (including XML-stripped text) should be inspectable.
+	if !containsAll(r.Prompts, "explain this function") {
+		t.Errorf("user query missing from prompts: %v", r.Prompts)
+	}
+	if r.Background {
+		t.Error("normal Copilot request should not be Background")
+	}
+}
+
+func TestParseRequest_VSCodeCopilot_BackgroundTitle(t *testing.T) {
+	body := `{
+		"model": "gpt-4o",
+		"stream": false,
+		"messages": [
+			{"role": "user", "content": "Please write a brief title for this conversation about Go interfaces"}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if !r.Background {
+		t.Error("expected Background=true for title generation request")
+	}
+}
+
+func TestParseRequest_VSCodeCopilot_BackgroundSummarize(t *testing.T) {
+	body := `{
+		"model": "gpt-4o",
+		"stream": false,
+		"messages": [
+			{"role": "user", "content": "Summarize the following conversation for use as context in a future conversation"}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if !r.Background {
+		t.Error("expected Background=true for summarize request")
+	}
+}
+
+// ── Copilot CLI (OpenAI Responses API /responses) ────────────────────────────
+
+func TestParseRequest_CopilotCLI_FirstTurn(t *testing.T) {
+	// First turn: instructions + plain user input string.
+	body := `{
+		"model": "gpt-4o",
+		"stream": true,
+		"instructions": "You are a CLI coding assistant. Current file: main.go\npackage main",
+		"input": "how do I add a flag?"
+	}`
+	r := ParseRequest([]byte(body))
+	if !containsAll(r.Prompts, "how do I add a flag?") {
+		t.Errorf("user input missing from prompts: %v", r.Prompts)
+	}
+	// Instructions always inspected.
+	if !containsAll(r.Prompts, "Current file") {
+		t.Errorf("instructions missing from prompts: %v", r.Prompts)
+	}
+	if r.UserQuery != "how do I add a flag?" {
+		t.Errorf("user query: got %q", r.UserQuery)
+	}
+}
+
+func TestParseRequest_CopilotCLI_FunctionCallOutput(t *testing.T) {
+	// Copilot CLI sending a function_call_output (tool result) back to the model.
+	body := `{
+		"model": "gpt-4o",
+		"stream": true,
+		"instructions": "You are a CLI coding assistant.",
+		"input": [
+			{"role": "user",    "type": "message",      "content": [{"type": "input_text", "text": "run ls"}]},
+			{"type": "function_call", "name": "bash",   "call_id": "c1"},
+			{"type": "function_call_output", "call_id": "c1", "output": "main.go\ngo.mod\nREADME.md"}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	// Tool output is current turn — must be inspectable.
+	if !containsAll(r.Prompts, "main.go") {
+		t.Errorf("function_call_output missing from prompts: %v", r.Prompts)
+	}
+	// Prior user message is before the function_call boundary — not re-inspected.
+	if !containsNone(r.Prompts, "run ls") {
+		t.Errorf("prior user message should not be in prompts: %v", r.Prompts)
+	}
+}
+
+func TestParseRequest_CopilotCLI_MultiTurn(t *testing.T) {
+	// Multi-turn Responses API: current turn is only after last assistant/function_call.
+	body := `{
+		"model": "gpt-4o",
+		"stream": true,
+		"instructions": "You are a CLI coding assistant.",
+		"input": [
+			{"role": "user",      "content": [{"type": "input_text", "text": "first question"}]},
+			{"role": "assistant", "content": [{"type": "text",       "text": "first answer"}]},
+			{"role": "user",      "content": [{"type": "input_text", "text": "follow up question"}]}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if !containsAll(r.Prompts, "follow up question") {
+		t.Errorf("current turn missing: %v", r.Prompts)
+	}
+	if !containsNone(r.Prompts, "first question", "first answer") {
+		t.Errorf("history should not be in prompts: %v", r.Prompts)
+	}
+	if r.UserQuery != "follow up question" {
+		t.Errorf("user query: got %q", r.UserQuery)
+	}
+}

@@ -147,7 +147,10 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 			req.Body = io.NopCloser(bytes.NewReader(body))
 		}
 
-		debugf("REQUEST: %s %s%s body=%d bytes stream=%v accept=%s", req.Method, stripPort(hostport), req.URL.Path, len(body), IsStreaming(body), req.Header.Get("Accept"))
+		// Parse once — all fields derived from a single unmarshal pass.
+		parsed := ParseRequest(body)
+
+		debugf("REQUEST: %s %s%s body=%d bytes stream=%v accept=%s", req.Method, stripPort(hostport), req.URL.Path, len(body), parsed.Streaming, req.Header.Get("Accept"))
 		if Debug {
 			for _, h := range []string{"X-Request-Id", "Vscode-Sessionid", "Vscode-Machineid", "X-Github-Api-Version", "X-Client-Session-Id", "User-Agent", "Copilot-Integration-Id"} {
 				if v := req.Header.Get(h); v != "" {
@@ -156,12 +159,12 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 			}
 		}
 
-		// Session ID + client: extract per-request from known locations.
+		// Session ID + client: extracted from headers where available, falling back
+		// to the Anthropic metadata.user_id field parsed by ParseRequest.
 		// Copilot VSCode extension: Vscode-Sessionid header.
 		// Copilot CLI: X-Client-Session-Id header; Copilot-Integration-Id names the client.
 		// Claude Code: metadata.user_id JSON field; User-Agent names the client.
 		// All others: first token of User-Agent as best-effort client name.
-		model := ExtractModel(body)
 		var sessionID, client string
 		if sid := req.Header.Get("Vscode-Sessionid"); sid != "" {
 			sessionID = sid
@@ -174,10 +177,10 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 				client = req.Header.Get("User-Agent")
 			}
 			debugf("SESSION (copilot-cli): %s", sid)
-		} else if sid := ExtractAnthropicSessionID(body); sid != "" {
-			sessionID = sid
+		} else if parsed.SessionID != "" {
+			sessionID = parsed.SessionID
 			client = req.Header.Get("User-Agent")
-			debugf("SESSION (claude): %s", sid)
+			debugf("SESSION (claude): %s", sessionID)
 		}
 		// Trim client to first space-delimited token to keep it short.
 		if i := strings.IndexByte(client, ' '); i > 0 {
@@ -199,12 +202,10 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 			continue
 		}
 
-		prompts := ExtractPrompts(body)
-		displayPrompt := ExtractUserQuery(body)
-		debugf("EXTRACTED: %d prompt(s)", len(prompts))
-		debugf("  query: %.120s", displayPrompt)
+		debugf("EXTRACTED: %d prompt(s)", len(parsed.Prompts))
+		debugf("  query: %.120s", parsed.UserQuery)
 		if Debug {
-			for i, seg := range prompts {
+			for i, seg := range parsed.Prompts {
 				end := 300
 				if len(seg) < end {
 					end = len(seg)
@@ -212,7 +213,7 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 				debugf("  PROMPT[%d] (%d chars): %.300s", i, len(seg), seg)
 			}
 		}
-		if Debug && len(prompts) == 0 && len(body) > 0 && (body[0] == '{' || body[0] == '[') {
+		if Debug && len(parsed.Prompts) == 0 && len(body) > 0 && (body[0] == '{' || body[0] == '[') {
 			// Print top-level keys to understand the body shape without dumping 93KB.
 			var top map[string]json.RawMessage
 			if json.Unmarshal(body, &top) == nil {
@@ -236,7 +237,7 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 
 		// Redact track-mode matches from the full inspection text, then
 		// replace each matched value in the raw body before forwarding.
-		combined := strings.Join(prompts, "\n\n")
+		combined := strings.Join(parsed.Prompts, "\n\n")
 		redactedCombined, redactions := p.eng.RedactText(combined)
 		redactedBody := body
 		if len(redactions) > 0 {
@@ -258,14 +259,14 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		// never be blocked — their responses surface directly in the chat UI, so
 		// a block response from us appears as a spurious chat message. We still
 		// inspect and redact them; we just don't terminate the connection.
-		allowBlock := !isCopilotBackground(body)
+		allowBlock := !parsed.Background
 
-		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock, sessionID, client, model)
+		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, parsed.UserQuery, redactions, allowBlock, sessionID, client, parsed.Model)
 		if blocked {
 			if strings.Contains(stripPort(hostport), "claude.ai") {
 				writeHTTPError(tlsClient, 400, msg)
 			} else {
-				writeBlockedResponse(tlsClient, msg, IsStreaming(body), req.URL.Path)
+				writeBlockedResponse(tlsClient, msg, parsed.Streaming, req.URL.Path)
 			}
 			return
 		}
@@ -479,30 +480,6 @@ func extractTelemetryInfo(body []byte) (events []string, summary string) {
 	return events, strings.Join(parts, " | ")
 }
 
-// isCopilotBackground reports whether the request body is a Copilot-internal
-// background call (title generation, summarization, progress messages).
-// These requests contain full conversation history and their responses appear
-// inline in the chat UI — so we must never block them.
-func isCopilotBackground(body []byte) bool {
-	var env struct {
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
-	}
-	if json.Unmarshal(body, &env) != nil {
-		return false
-	}
-	for _, m := range env.Messages {
-		t := strings.TrimSpace(m.Content)
-		if strings.HasPrefix(t, "Summarize the following") ||
-			strings.HasPrefix(t, "Please write a brief title") ||
-			strings.HasPrefix(t, "Please generate exactly") {
-			return true
-		}
-	}
-	return false
-}
 
 // inspectAndStore stores every intercepted prompt.
 // redactions are track-mode matches already applied to the forwarded body.
