@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chaudharydeepak/prompt-guard/inspector"
-	"github.com/chaudharydeepak/prompt-guard/store"
+	"github.com/chaudharydeepak/redasq/inspector"
+	"github.com/chaudharydeepak/redasq/store"
 )
 
 // Debug enables verbose request/connection logging. Set from main via --debug flag.
@@ -547,7 +547,7 @@ func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombi
 			ruleNames = append(ruleNames, m.RuleName)
 		}
 	}
-	msg := "⚠️ **Prompt Guard blocked this request.**\n\n" +
+	msg := "⚠️ **Redasq blocked this request.**\n\n" +
 		"Your prompt contained sensitive information detected by the following rule(s):\n"
 	for _, name := range ruleNames {
 		msg += "- " + name + "\n"
@@ -652,7 +652,7 @@ func writeBlockedResponse(conn net.Conn, assistantMsg string, streaming bool, pa
 				FinishReason interface{} `json:"finish_reason"`
 			} `json:"choices"`
 		}{
-			ID: "chatcmpl-blocked", Object: "chat.completion.chunk", Model: "prompt-guard",
+			ID: "chatcmpl-blocked", Object: "chat.completion.chunk", Model: "redasq",
 			Choices: []struct {
 				Index        int    `json:"index"`
 				Delta        struct {
@@ -665,7 +665,7 @@ func writeBlockedResponse(conn net.Conn, assistantMsg string, streaming bool, pa
 				Content string `json:"content"`
 			}{Role: "assistant", Content: assistantMsg}}},
 		})
-		done := `{"id":"chatcmpl-blocked","object":"chat.completion.chunk","created":0,"model":"prompt-guard",` +
+		done := `{"id":"chatcmpl-blocked","object":"chat.completion.chunk","created":0,"model":"redasq",` +
 			`"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
 		body := "data: " + string(chunkB) + "\n\ndata: " + done + "\n\ndata: [DONE]\n\n"
 		fmt.Fprintf(conn,
@@ -692,7 +692,7 @@ func writeBlockedResponse(conn net.Conn, assistantMsg string, streaming bool, pa
 				TotalTokens      int `json:"total_tokens"`
 			} `json:"usage"`
 		}{
-			ID: "chatcmpl-blocked", Object: "chat.completion", Model: "prompt-guard",
+			ID: "chatcmpl-blocked", Object: "chat.completion", Model: "redasq",
 			Choices: []struct {
 				Index        int    `json:"index"`
 				Message      struct {

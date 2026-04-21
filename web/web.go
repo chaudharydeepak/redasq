@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chaudharydeepak/prompt-guard/inspector"
-	"github.com/chaudharydeepak/prompt-guard/store"
+	"github.com/chaudharydeepak/redasq/inspector"
+	"github.com/chaudharydeepak/redasq/store"
 )
 
 // Version is displayed in the dashboard header. Set from main via web.Version = version.
@@ -306,7 +306,7 @@ func apiExport(w http.ResponseWriter, r *http.Request, db *store.Store) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(
-		`attachment; filename="prompt-guard-export-%s.txt"`,
+		`attachment; filename="redasq-export-%s.txt"`,
 		time.Now().Format("2006-01-02"),
 	))
 
@@ -329,7 +329,7 @@ func apiExport(w http.ResponseWriter, r *http.Request, db *store.Store) {
 		toStr = to.Format("2006-01-02")
 	}
 
-	fmt.Fprintf(w, `You are analyzing a developer's AI coding assistant usage log captured by Prompt Guard,
+	fmt.Fprintf(w, `You are analyzing a developer's AI coding assistant usage log captured by Redasq,
 a local HTTPS proxy that intercepts prompts sent to AI services (GitHub Copilot, OpenAI, Anthropic).
 Sensitive values (API keys, passwords, PII) have been replaced with [REDACTED] before this export.
 
@@ -455,7 +455,7 @@ var dashboardHTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Prompt Guard</title>
+<title>Redasq</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -841,9 +841,9 @@ var dashboardHTML = `<!DOCTYPE html>
 
 <header class="hd">
   <div class="hd-logo">
-    <a href="https://github.com/chaudharydeepak/prompt-guard" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit;">
-    <img src="/favicon.svg" class="hd-shield" alt="Prompt Guard">
-    <div class="hd-name">Prompt<em>Guard</em><span class="hd-version">{{VERSION}}</span></div>
+    <a href="https://github.com/chaudharydeepak/redasq" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit;">
+    <img src="/favicon.svg" class="hd-shield" alt="Redasq">
+    <div class="hd-name">Redasq<em></em><span class="hd-version">{{VERSION}}</span></div>
     </a>
   </div>
   <div class="hd-sep"></div>

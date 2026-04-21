@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.svg" width="120" alt="Prompt Guard">
+  <img src="logo.svg" width="120" alt="Redasq">
 </p>
 
 <p align="center">
@@ -14,11 +14,11 @@
   <a href="#architecture">Architecture</a>
 </p>
 
-# Prompt Guard
+# Redasq
 
 A local HTTPS proxy that intercepts every prompt sent to AI coding assistants — blocking or redacting sensitive data before it reaches the model.
 
-![Prompt Guard demo](demo.gif)
+![Redasq demo](demo.gif)
 
 ---
 
@@ -26,7 +26,7 @@ A local HTTPS proxy that intercepts every prompt sent to AI coding assistants �
 
 AI tools like Claude Code, GitHub Copilot, and ChatGPT receive your full editor context on every request. That context routinely contains API keys, passwords, database credentials, SSNs, and internal IP addresses — sent to third-party servers without you noticing.
 
-Prompt Guard sits between your tools and the AI APIs, inspects every prompt in real time, and either **blocks** the request or **redacts** the sensitive value before forwarding.
+Redasq sits between your tools and the AI APIs, inspects every prompt in real time, and either **blocks** the request or **redacts** the sensitive value before forwarding.
 
 - [GitGuardian State of Secrets Sprawl 2026](https://blog.gitguardian.com/the-state-of-secrets-sprawl-2026/) — 29M secrets exposed on public GitHub; AI-service leaks up 81% YoY
 - [AI Coding Assistants Drive Surge in Secret Leaks](https://oecd.ai/en/incidents/2026-03-17-2273) — Claude Code-assisted commits leak secrets at 2× the rate of human developers
@@ -61,15 +61,15 @@ All other HTTPS traffic is tunnelled through unchanged.
 
 ```bash
 brew tap chaudharydeepak/tap
-brew install prompt-guard
+brew install redasq
 ```
 
 ### Build from source
 
 ```bash
-git clone https://github.com/chaudharydeepak/prompt-guard
-cd prompt-guard
-go build -o prompt-guard .
+git clone https://github.com/chaudharydeepak/redasq
+cd redasq
+go build -o redasq .
 ```
 
 Requires Go 1.21+.
@@ -82,13 +82,13 @@ Requires Go 1.21+.
 
 ```bash
 # Foreground
-prompt-guard
+redasq
 
 # Background service — auto-starts on login (Homebrew only)
-brew services start chaudharydeepak/tap/prompt-guard
+brew services start chaudharydeepak/tap/redasq
 ```
 
-On first run, a local CA cert is generated at `~/.prompt-guard/ca.crt`. The proxy binds to `:8080` and the dashboard to `:7778`.
+On first run, a local CA cert is generated at `~/.redasq/ca.crt`. The proxy binds to `:8080` and the dashboard to `:7778`.
 
 ### 2. Set the proxy environment variables
 
@@ -118,7 +118,7 @@ http://localhost:7778
 Node.js-based. Add this alongside the proxy vars — no system keychain change needed:
 
 ```bash
-export NODE_EXTRA_CA_CERTS=~/.prompt-guard/ca.crt
+export NODE_EXTRA_CA_CERTS=~/.redasq/ca.crt
 ```
 
 ### Copilot CLI
@@ -128,12 +128,12 @@ Electron-based (uses Chromium's cert store). Requires the CA cert to be installe
 **macOS:**
 ```bash
 sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain ~/.prompt-guard/ca.crt
+  -k /Library/Keychains/System.keychain ~/.redasq/ca.crt
 ```
 
 **Linux:**
 ```bash
-sudo cp ~/.prompt-guard/ca.crt /usr/local/share/ca-certificates/prompt-guard.crt
+sudo cp ~/.redasq/ca.crt /usr/local/share/ca-certificates/redasq.crt
 sudo update-ca-certificates
 ```
 
@@ -184,7 +184,7 @@ All rules are visible in the dashboard and can be changed at any time without re
 
 ### Custom rules
 
-`~/.prompt-guard/rules.json` — created automatically when you first change a rule in the dashboard.
+`~/.redasq/rules.json` — created automatically when you first change a rule in the dashboard.
 
 **Override a built-in rule:**
 ```json
@@ -230,7 +230,7 @@ State persists across restarts. Each request is tagged in the dashboard so you c
 ```
 --port            Proxy port (default: 8080)
 --web-port        Dashboard port (default: 7778)
---ca-dir          Directory for CA cert, key, and database (default: ~/.prompt-guard)
+--ca-dir          Directory for CA cert, key, and database (default: ~/.redasq)
 --upstream-proxy  Chain through a corporate proxy (e.g. http://proxy.corp.com:8080)
 --debug           Verbose request/connection logging
 --version         Print version and exit
@@ -243,7 +243,7 @@ State persists across restarts. Each request is tagged in the dashboard so you c
 ```mermaid
 flowchart TD
     Client["🖥️ AI Client\n(Claude Code · Copilot · curl)"]
-    PG["🛡️ Prompt Guard\n:8080"]
+    PG["🛡️ Redasq\n:8080"]
     Rules["230 Detection Rules\n(gitleaks + hand-rolled)"]
     DB[("SQLite\naudit log")]
     Dashboard["📊 Dashboard\n:7778"]
@@ -264,7 +264,7 @@ flowchart TD
 ```
 
 ```
-prompt-guard/
+redasq/
 ├── main.go              CLI entrypoint
 ├── proxy/
 │   ├── ca.go            Local CA cert generation and leaf cert signing

@@ -47,7 +47,7 @@ func generateCA(certPath, keyPath string) (*CA, error) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Prompt Guard CA", Organization: []string{"Prompt Guard"}},
+		Subject:               pkix.Name{CommonName: "Redasq CA", Organization: []string{"Redasq"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
 		IsCA:                  true,

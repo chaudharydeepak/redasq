@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/chaudharydeepak/prompt-guard/inspector"
+	"github.com/chaudharydeepak/redasq/inspector"
 	_ "modernc.org/sqlite"
 )
 

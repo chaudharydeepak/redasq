@@ -9,10 +9,10 @@ import (
 	"regexp"
 	"runtime"
 
-	"github.com/chaudharydeepak/prompt-guard/inspector"
-	"github.com/chaudharydeepak/prompt-guard/proxy"
-	"github.com/chaudharydeepak/prompt-guard/store"
-	"github.com/chaudharydeepak/prompt-guard/web"
+	"github.com/chaudharydeepak/redasq/inspector"
+	"github.com/chaudharydeepak/redasq/proxy"
+	"github.com/chaudharydeepak/redasq/store"
+	"github.com/chaudharydeepak/redasq/web"
 )
 
 // version is set at build time via -ldflags="-X main.version=v1.2.3"
@@ -38,7 +38,7 @@ func main() {
 		log.Fatalf("mkdir %s: %v", *caDir, err)
 	}
 
-	db, err := store.Open(filepath.Join(*caDir, "prompt-guard.db"))
+	db, err := store.Open(filepath.Join(*caDir, "redasq.db"))
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
@@ -89,12 +89,12 @@ func main() {
 
 func defaultCADir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".prompt-guard")
+	return filepath.Join(home, ".redasq")
 }
 
 func printSetup(certPath string, port, webPort int, upstreamProxy string) {
 	fmt.Println("\n┌─────────────────────────────────────────┐")
-	fmt.Printf( "│        Prompt Guard %-20s│\n", version)
+	fmt.Printf( "│        Redasq %-20s│\n", version)
 	fmt.Println("└─────────────────────────────────────────┘")
 	fmt.Printf("\nCA cert:   %s\n\n", certPath)
 
@@ -103,7 +103,7 @@ func printSetup(certPath string, port, webPort int, upstreamProxy string) {
 	case "darwin":
 		fmt.Printf("  sudo security add-trusted-cert -d -r trustRoot \\\n    -k /Library/Keychains/System.keychain %s\n\n", certPath)
 	case "linux":
-		fmt.Printf("  sudo cp %s /usr/local/share/ca-certificates/prompt-guard.crt\n  sudo update-ca-certificates\n\n", certPath)
+		fmt.Printf("  sudo cp %s /usr/local/share/ca-certificates/redasq.crt\n  sudo update-ca-certificates\n\n", certPath)
 	case "windows":
 		fmt.Printf("  certutil -addstore -f ROOT %s\n\n", certPath)
 	}

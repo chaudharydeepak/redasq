@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
-	"github.com/chaudharydeepak/prompt-guard/inspector"
-	"github.com/chaudharydeepak/prompt-guard/store"
-	"github.com/chaudharydeepak/prompt-guard/web"
+	"github.com/chaudharydeepak/redasq/inspector"
+	"github.com/chaudharydeepak/redasq/store"
+	"github.com/chaudharydeepak/redasq/web"
 )
 
 // newTestServer starts a real dashboard server backed by a temp SQLite DB.

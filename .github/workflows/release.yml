@@ -35,27 +35,27 @@ jobs:
         include:
           - goos: darwin
             goarch: arm64
-            asset: prompt-guard-darwin-arm64
-            tarball: prompt-guard-darwin-arm64.tar.gz
+            asset: redasq-darwin-arm64
+            tarball: redasq-darwin-arm64.tar.gz
             bottle_tags: "arm64_sequoia arm64_sonoma arm64_ventura"
           - goos: darwin
             goarch: amd64
-            asset: prompt-guard-darwin-amd64
-            tarball: prompt-guard-darwin-amd64.tar.gz
+            asset: redasq-darwin-amd64
+            tarball: redasq-darwin-amd64.tar.gz
             bottle_tags: "sequoia sonoma ventura"
           - goos: linux
             goarch: arm64
-            asset: prompt-guard-linux-arm64
-            tarball: prompt-guard-linux-arm64.tar.gz
+            asset: redasq-linux-arm64
+            tarball: redasq-linux-arm64.tar.gz
             bottle_tags: "aarch64_linux"
           - goos: linux
             goarch: amd64
-            asset: prompt-guard-linux-amd64
-            tarball: prompt-guard-linux-amd64.tar.gz
+            asset: redasq-linux-amd64
+            tarball: redasq-linux-amd64.tar.gz
             bottle_tags: "x86_64_linux"
           - goos: windows
             goarch: amd64
-            asset: prompt-guard-windows-amd64.exe
+            asset: redasq-windows-amd64.exe
             tarball: ""
             bottle_tags: ""
 
@@ -76,10 +76,10 @@ jobs:
       - name: Package source tarball (macOS / Linux)
         if: matrix.tarball != ''
         run: |
-          cp ${{ matrix.asset }} prompt-guard
-          tar czf ${{ matrix.tarball }} prompt-guard
+          cp ${{ matrix.asset }} redasq
+          tar czf ${{ matrix.tarball }} redasq
           sha256sum ${{ matrix.tarball }} > ${{ matrix.tarball }}.sha256
-          rm prompt-guard
+          rm redasq
 
       - name: Create Homebrew bottles (macOS / Linux)
         if: matrix.bottle_tags != ''
@@ -88,10 +88,10 @@ jobs:
         run: |
           VER="${VERSION#v}"
           for tag in ${{ matrix.bottle_tags }}; do
-            mkdir -p "btl/prompt-guard/${VER}/bin"
-            cp ${{ matrix.asset }} "btl/prompt-guard/${VER}/bin/prompt-guard"
-            BOTTLE="prompt-guard-${VER}.${tag}.bottle.tar.gz"
-            tar czf "${BOTTLE}" -C btl prompt-guard
+            mkdir -p "btl/redasq/${VER}/bin"
+            cp ${{ matrix.asset }} "btl/redasq/${VER}/bin/redasq"
+            BOTTLE="redasq-${VER}.${tag}.bottle.tar.gz"
+            tar czf "${BOTTLE}" -C btl redasq
             sha256sum "${BOTTLE}" > "${BOTTLE}.sha256"
             rm -rf btl
           done
@@ -107,8 +107,8 @@ jobs:
           path: |
             ${{ matrix.tarball }}
             ${{ matrix.tarball }}.sha256
-            prompt-guard-*.bottle.tar.gz
-            prompt-guard-*.bottle.tar.gz.sha256
+            redasq-*.bottle.tar.gz
+            redasq-*.bottle.tar.gz.sha256
 
       - uses: actions/upload-artifact@v4
         if: matrix.tarball == ''
@@ -131,14 +131,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            prompt-guard-darwin-*.tar.gz
-            prompt-guard-darwin-*.tar.gz.sha256
-            prompt-guard-linux-*.tar.gz
-            prompt-guard-linux-*.tar.gz.sha256
-            prompt-guard-*.bottle.tar.gz
-            prompt-guard-*.bottle.tar.gz.sha256
-            prompt-guard-windows-amd64.exe
-            prompt-guard-windows-amd64.exe.sha256
+            redasq-darwin-*.tar.gz
+            redasq-darwin-*.tar.gz.sha256
+            redasq-linux-*.tar.gz
+            redasq-linux-*.tar.gz.sha256
+            redasq-*.bottle.tar.gz
+            redasq-*.bottle.tar.gz.sha256
+            redasq-windows-amd64.exe
+            redasq-windows-amd64.exe.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
 
@@ -154,10 +154,10 @@ jobs:
       - name: Compute SHA256s
         id: shas
         run: |
-          echo "arm64=$(awk '{print $1}' prompt-guard-darwin-arm64.tar.gz.sha256)" >> $GITHUB_OUTPUT
-          echo "amd64=$(awk '{print $1}' prompt-guard-darwin-amd64.tar.gz.sha256)" >> $GITHUB_OUTPUT
-          echo "linux_arm64=$(awk '{print $1}' prompt-guard-linux-arm64.tar.gz.sha256)" >> $GITHUB_OUTPUT
-          echo "linux_amd64=$(awk '{print $1}' prompt-guard-linux-amd64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+          echo "arm64=$(awk '{print $1}' redasq-darwin-arm64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+          echo "amd64=$(awk '{print $1}' redasq-darwin-amd64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+          echo "linux_arm64=$(awk '{print $1}' redasq-linux-arm64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+          echo "linux_amd64=$(awk '{print $1}' redasq-linux-amd64.tar.gz.sha256)" >> $GITHUB_OUTPUT
 
       - name: Build bottle sha256 lines
         id: bottles
@@ -166,10 +166,10 @@ jobs:
         run: |
           VER="${VERSION#v}"
           LINES=""
-          for f in prompt-guard-${VER}.*.bottle.tar.gz.sha256; do
+          for f in redasq-${VER}.*.bottle.tar.gz.sha256; do
             [ -f "$f" ] || continue
             sha=$(awk '{print $1}' "$f")
-            tag=$(echo "$f" | sed "s/prompt-guard-${VER}\.\(.*\)\.bottle\.tar\.gz\.sha256/\1/")
+            tag=$(echo "$f" | sed "s/redasq-${VER}\.\(.*\)\.bottle\.tar\.gz\.sha256/\1/")
             LINES="${LINES}      sha256 cellar: :any_skip_relocation, ${tag}: \"${sha}\"\n"
           done
           # Store as multiline output
@@ -196,60 +196,60 @@ jobs:
           BOTTLE_LINES: ${{ steps.bottles.outputs.lines }}
         run: |
           VER="${VERSION#v}"
-          cat > homebrew-tap/Formula/prompt-guard.rb << FORMULA
-          class PromptGuard < Formula
+          cat > homebrew-tap/Formula/redasq.rb << FORMULA
+          class Redasq < Formula
             desc "Local HTTPS MITM proxy that inspects, redacts, or blocks sensitive data sent to AI coding assistants"
-            homepage "https://github.com/chaudharydeepak/prompt-guard"
+            homepage "https://github.com/chaudharydeepak/redasq"
             version "${VER}"
             license "MIT"
 
             # Bottles are pre-built binaries — no compiler or Xcode CLT required.
             bottle do
-              root_url "https://github.com/chaudharydeepak/prompt-guard/releases/download/${VERSION}"
+              root_url "https://github.com/chaudharydeepak/redasq/releases/download/${VERSION}"
           ${BOTTLE_LINES}    end
 
             # Fallback source build for OS versions not covered by a bottle.
             on_macos do
               if Hardware::CPU.arm?
-                url "https://github.com/chaudharydeepak/prompt-guard/releases/download/${VERSION}/prompt-guard-darwin-arm64.tar.gz"
+                url "https://github.com/chaudharydeepak/redasq/releases/download/${VERSION}/redasq-darwin-arm64.tar.gz"
                 sha256 "${SHA_DARWIN_ARM64}"
               else
-                url "https://github.com/chaudharydeepak/prompt-guard/releases/download/${VERSION}/prompt-guard-darwin-amd64.tar.gz"
+                url "https://github.com/chaudharydeepak/redasq/releases/download/${VERSION}/redasq-darwin-amd64.tar.gz"
                 sha256 "${SHA_DARWIN_AMD64}"
               end
             end
 
             on_linux do
               if Hardware::CPU.arm?
-                url "https://github.com/chaudharydeepak/prompt-guard/releases/download/${VERSION}/prompt-guard-linux-arm64.tar.gz"
+                url "https://github.com/chaudharydeepak/redasq/releases/download/${VERSION}/redasq-linux-arm64.tar.gz"
                 sha256 "${SHA_LINUX_ARM64}"
               else
-                url "https://github.com/chaudharydeepak/prompt-guard/releases/download/${VERSION}/prompt-guard-linux-amd64.tar.gz"
+                url "https://github.com/chaudharydeepak/redasq/releases/download/${VERSION}/redasq-linux-amd64.tar.gz"
                 sha256 "${SHA_LINUX_AMD64}"
               end
             end
 
             def install
-              bin.install "prompt-guard"
+              bin.install "redasq"
             end
 
             service do
-              run [opt_bin/"prompt-guard"]
+              run [opt_bin/"redasq"]
               keep_alive true
-              log_path var/"log/prompt-guard.log"
-              error_log_path var/"log/prompt-guard.log"
+              log_path var/"log/redasq.log"
+              error_log_path var/"log/redasq.log"
             end
 
             def caveats
               <<~EOS
-                Prompt Guard intercepts AI coding assistant traffic (Claude Code, Copilot, etc.)
+                Redasq intercepts AI coding assistant traffic (Claude Code, Copilot, etc.)
                 and lets you inspect, redact, or block sensitive data before it leaves your machine.
 
                 ── Quick start ──────────────────────────────────────────────────────────
                 1. Start the proxy (runs on :8080, dashboard on :7778):
-                     prompt-guard
+                     redasq
                    Or run it as a background service:
-                     brew services start prompt-guard
+                     brew services start redasq
 
                 2. Point your shell at the proxy (add to ~/.zshrc or ~/.bashrc):
                      export HTTP_PROXY=http://localhost:8080
@@ -265,15 +265,15 @@ jobs:
 
                   sudo security add-trusted-cert -d -r trustRoot \\
                     -k /Library/Keychains/System.keychain \\
-                    ~/.prompt-guard/ca.crt
+                    ~/.redasq/ca.crt
 
-                The cert is auto-generated on first run at ~/.prompt-guard/ca.crt
+                The cert is auto-generated on first run at ~/.redasq/ca.crt
                 ─────────────────────────────────────────────────────────────────────────
               EOS
             end
 
             test do
-              assert_match version.to_s, shell_output("#{bin}/prompt-guard --version")
+              assert_match version.to_s, shell_output("#{bin}/redasq --version")
             end
           end
           FORMULA
@@ -283,6 +283,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/prompt-guard.rb
-          git commit -m "prompt-guard ${{ github.ref_name }}"
+          git add Formula/redasq.rb
+          git commit -m "redasq ${{ github.ref_name }}"
           git push

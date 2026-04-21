@@ -1,4 +1,4 @@
-module github.com/chaudharydeepak/prompt-guard
+module github.com/chaudharydeepak/redasq
 
 go 1.26
 

@@ -381,7 +381,7 @@ func TestUserQuery_AnthropicMultiBlock_UserQueryInSecondBlock(t *testing.T) {
 	body := `{
 		"messages": [
 			{"role": "user", "content": [
-				{"type": "text", "text": "The user's current OS is: macOS I am working in a workspace with the following folders: - /Users/deepakchaudhary/prompt-guard"},
+				{"type": "text", "text": "The user's current OS is: macOS I am working in a workspace with the following folders: - /Users/deepakchaudhary/redasq"},
 				{"type": "text", "text": "<user_query>123-45-6789</user_query>"}
 			]}
 		]
