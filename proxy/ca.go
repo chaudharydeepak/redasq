@@ -87,12 +87,16 @@ func loadCA(certPath, keyPath string) (*CA, error) {
 }
 
 // IssueCert returns a TLS certificate for host signed by the CA.
-// Results are cached so each host only gets one cert per process lifetime.
+// Results are cached and automatically regenerated when expiring within 24h.
 func (ca *CA) IssueCert(host string) (*tls.Certificate, error) {
 	ca.mu.Lock()
 	if c, ok := ca.cache[host]; ok {
-		ca.mu.Unlock()
-		return c, nil
+		// Reuse only if the cert is valid for at least 24 more hours.
+		if c.Leaf != nil && time.Until(c.Leaf.NotAfter) > 24*time.Hour {
+			ca.mu.Unlock()
+			return c, nil
+		}
+		delete(ca.cache, host)
 	}
 	ca.mu.Unlock()
 
@@ -105,7 +109,7 @@ func (ca *CA) IssueCert(host string) (*tls.Certificate, error) {
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
 		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -119,9 +123,11 @@ func (ca *CA) IssueCert(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
+	leaf, _ := x509.ParseCertificate(der)
 	cert := &tls.Certificate{
 		Certificate: [][]byte{der, ca.cert.Raw},
 		PrivateKey:  key,
+		Leaf:        leaf, // stored for expiry check on cache lookup
 	}
 
 	ca.mu.Lock()
