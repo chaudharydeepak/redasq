@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -13,10 +14,17 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chaudharydeepak/redasq/inspector"
+	"github.com/chaudharydeepak/redasq/mlclient"
 	"github.com/chaudharydeepak/redasq/store"
+)
+
+var (
+	mlFirstOK   sync.Once
+	mlFirstFail sync.Once
 )
 
 // Debug enables verbose request/connection logging. Set from main via --debug flag.
@@ -45,6 +53,7 @@ type proxy struct {
 	ca            *CA
 	db            *store.Store
 	eng           *inspector.Engine
+	ml            *mlclient.Client
 	upstreamProxy string
 }
 
@@ -63,8 +72,10 @@ func isTarget(hostport string) bool {
 
 // Start runs the HTTP proxy on the given port. Blocks until error.
 // upstreamProxy is optional — set to route outbound traffic through a corporate proxy.
-func Start(port int, ca *CA, db *store.Store, eng *inspector.Engine, upstreamProxy string) error {
-	p := &proxy{ca: ca, db: db, eng: eng, upstreamProxy: upstreamProxy}
+// ml is optional — when non-nil, every intercepted prompt is also classified
+// in parallel with forwarding and the result is written back to the prompt row.
+func Start(port int, ca *CA, db *store.Store, eng *inspector.Engine, ml *mlclient.Client, upstreamProxy string) error {
+	p := &proxy{ca: ca, db: db, eng: eng, ml: ml, upstreamProxy: upstreamProxy}
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: p,
@@ -261,7 +272,30 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		// inspect and redact them; we just don't terminate the connection.
 		allowBlock := !parsed.Background
 
-		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, parsed.UserQuery, redactions, allowBlock, sessionID, client, parsed.Model)
+		// Display prompt: for tool-chain continuation requests there's no new
+		// user-typed text — show a clear marker rather than the parent turn's
+		// text (would look like a duplicate row) or the system-prompt soup
+		// (the legacy fallback). Regex inspection still runs on `combined` so
+		// sensitive data leaking through tool output is still caught.
+		displayPrompt := parsed.UserQuery
+		if parsed.IsContinuation {
+			displayPrompt = "↳ tool continuation"
+		}
+
+		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock, sessionID, client, parsed.Model)
+
+		// Fire classifier in parallel with the upstream call, but only on
+		// requests that actually carry new user-typed text. Skipping
+		// continuations avoids redundant predictions on borrowed context.
+		const mlMaxChars = 4000
+		if savedID > 0 && p.ml != nil && !parsed.IsContinuation && parsed.UserQuery != "" {
+			mlText := parsed.UserQuery
+			if len(mlText) > mlMaxChars {
+				mlText = mlText[:mlMaxChars]
+			}
+			go p.classifyAndStore(savedID, mlText)
+		}
+
 		if blocked {
 			if strings.Contains(stripPort(hostport), "claude.ai") {
 				writeHTTPError(tlsClient, 400, msg)
@@ -480,6 +514,37 @@ func extractTelemetryInfo(body []byte) (events []string, summary string) {
 	return events, strings.Join(parts, " | ")
 }
 
+
+// classifyAndStore runs the prompt through the classifier sidecar and writes
+// the JSON-encoded prediction back to the prompt row. Failures are logged
+// at debug level only — ML is opinion-only, so an outage must not affect traffic.
+// The first success and first failure are also logged at info level so the
+// operator can see the integration is live without enabling --debug.
+func (p *proxy) classifyAndStore(id int64, text string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pred, err := p.ml.Classify(ctx, text)
+	if err != nil {
+		mlFirstFail.Do(func() {
+			log.Printf("ml: first classify failed (id=%d): %v — predictions will be missing until sidecar is reachable", id, err)
+		})
+		debugf("ml: classify id=%d: %v", id, err)
+		return
+	}
+	b, err := json.Marshal(pred)
+	if err != nil {
+		debugf("ml: marshal id=%d: %v", id, err)
+		return
+	}
+	if err := p.db.UpdateMLPrediction(id, string(b)); err != nil {
+		debugf("ml: update id=%d: %v", id, err)
+		return
+	}
+	mlFirstOK.Do(func() {
+		log.Printf("ml: live (id=%d top=%s score=%.2f latency=%dms)", id, pred.TopLabel, pred.TopScore, pred.LatencyMS)
+	})
+	debugf("ml: id=%d top=%s score=%.3f labels=%v latency=%dms", id, pred.TopLabel, pred.TopScore, pred.AboveThreshold, pred.LatencyMS)
+}
 
 // inspectAndStore stores every intercepted prompt.
 // redactions are track-mode matches already applied to the forwarded body.

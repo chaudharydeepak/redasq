@@ -8,16 +8,44 @@ import (
 
 var xmlTagRe = regexp.MustCompile(`<[^>]+>`)
 
+// harnessBlockRe strips wrapper blocks injected by client harnesses around the
+// user's actual typed text. Both the tags AND the content are removed (unlike
+// xmlTagRe which keeps content) — these blocks carry meta context, not user
+// input, and leaving them in pollutes both the dashboard prompt display and
+// the ML classifier input.
+//
+// Supported wrappers:
+//   <system-reminder>      — Claude Code harness reminders
+//   <command-name|message|args>, <local-command-stdout|stderr> — Claude Code slash-cmd metadata
+//   <context>              — Copilot (everything except <user_query>)
+//   <environment_details>  — Cline / similar agents
+//
+// Go regexp lacks backreferences, so each open/close pair gets its own branch.
+var harnessBlockRe = regexp.MustCompile(`(?s)` +
+	`<system-reminder\b[^>]*>.*?</system-reminder>` +
+	`|<command-name\b[^>]*>.*?</command-name>` +
+	`|<command-message\b[^>]*>.*?</command-message>` +
+	`|<command-args\b[^>]*>.*?</command-args>` +
+	`|<local-command-stdout\b[^>]*>.*?</local-command-stdout>` +
+	`|<local-command-stderr\b[^>]*>.*?</local-command-stderr>` +
+	`|<context\b[^>]*>.*?</context>` +
+	`|<environment_details\b[^>]*>.*?</environment_details>`)
+
+func stripHarnessWrappers(s string) string {
+	return harnessBlockRe.ReplaceAllString(s, "")
+}
+
 // Request holds all fields derived from a single LLM API request body.
 // Call ParseRequest once per intercepted request instead of calling individual
 // Extract* functions — each previously unmarshalled the full body independently.
 type Request struct {
-	Model      string   // "model" field from request body
-	Streaming  bool     // true when stream:true
-	SessionID  string   // Anthropic session ID from metadata.user_id
-	Prompts    []string // inspectable text, current turn only (for rule matching)
-	UserQuery  string   // user's typed message only (for dashboard display)
-	Background bool     // Copilot internal call (title / summary) — never block
+	Model          string   // "model" field from request body
+	Streaming      bool     // true when stream:true
+	SessionID      string   // Anthropic session ID from metadata.user_id
+	Prompts        []string // inspectable text, current turn only (for rule matching)
+	UserQuery      string   // user's typed message only (for dashboard display)
+	Background     bool     // Copilot internal call (title / summary) — never block
+	IsContinuation bool     // tool-chain continuation request (no new user-typed text)
 }
 
 // ParseRequest parses a request body once and populates all fields in a single
@@ -70,10 +98,18 @@ func ParseRequest(body []byte) *Request {
 	}
 
 	// Messages array (Anthropic /v1/messages + OpenAI /v1/chat/completions).
+	//
+	// Two passes with different semantics:
+	//   1. Prompts (regex inspection) — current turn only. Re-inspecting full
+	//      history on every turn would re-flag the same value repeatedly.
+	//   2. UserQuery (display + ML) — walk backwards from the end and pick the
+	//      most recent user message that carries actual text. This is independent
+	//      of "current turn": Claude Code's tool-use chains and sub-agent calls
+	//      end with an assistant message, which would leave UserQuery empty
+	//      under the Prompts rule even though the user typed something earlier
+	//      in the conversation. Tool_result-only user messages are skipped
+	//      because userQueryFromContent extracts only "text" blocks.
 	if len(env.Messages) > 0 {
-		// Inspect only the current turn — everything after the last assistant message.
-		// Re-inspecting full history on every turn would re-flag the same value on
-		// every subsequent request.
 		lastAsst := -1
 		for i := len(env.Messages) - 1; i >= 0; i-- {
 			if env.Messages[i].Role == "assistant" {
@@ -85,9 +121,6 @@ func ParseRequest(body []byte) *Request {
 			msg := env.Messages[i]
 			rawTexts = append(rawTexts, extractContentText(msg.Content)...)
 			if msg.Role == "user" {
-				if q := userQueryFromContent(msg.Content); q != "" {
-					queryParts = append(queryParts, q)
-				}
 				// Copilot background detection: internal calls (title generation,
 				// summarization, progress) use plain string content with known prefixes.
 				var s string
@@ -100,6 +133,28 @@ func ParseRequest(body []byte) *Request {
 					}
 				}
 			}
+		}
+		// UserQuery: text from the LAST message only, and only if it's a user
+		// message that carries actual text. We deliberately do NOT walk back
+		// into history: Claude Code (and other clients) re-send the full
+		// conversation on every API call, so walking back would attribute the
+		// parent turn's typed text to every tool-chain continuation request,
+		// producing visible duplicates in the dashboard. Continuations are
+		// flagged separately via IsContinuation below.
+		last := env.Messages[len(env.Messages)-1]
+		if last.Role == "user" {
+			if q := userQueryFromContent(last.Content); q != "" {
+				queryParts = append(queryParts, q)
+			} else {
+				// Last message is a user message with no text content — only
+				// tool_result blocks. That's a Claude-Code-style tool-chain
+				// continuation; no new typed input from the user.
+				r.IsContinuation = true
+			}
+		} else {
+			// Last message isn't a user message — the request is not asking
+			// the model to respond to typed input. Treat as continuation.
+			r.IsContinuation = true
 		}
 	}
 
@@ -127,20 +182,12 @@ func ParseRequest(body []byte) *Request {
 				} `json:"content"`
 			}
 			if json.Unmarshal(env.Input, &items) == nil {
-				// For inspection: treat both assistant messages and function_call items
-				// as the assistant turn boundary.
+				// Prompts (regex inspection): current turn only — everything after
+				// the last assistant message OR function_call (tool boundary).
 				lastAsstPrompt := -1
 				for i := len(items) - 1; i >= 0; i-- {
 					if items[i].Role == "assistant" || items[i].Type == "function_call" {
 						lastAsstPrompt = i
-						break
-					}
-				}
-				// For display: only role==assistant marks the turn boundary.
-				lastAsstQuery := -1
-				for i := len(items) - 1; i >= 0; i-- {
-					if items[i].Role == "assistant" {
-						lastAsstQuery = i
 						break
 					}
 				}
@@ -164,13 +211,31 @@ func ParseRequest(body []byte) *Request {
 							}
 						}
 					}
-					if i > lastAsstQuery && item.Role == "user" {
-						for _, c := range item.Content {
-							if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
-								queryParts = append(queryParts, userQueryFromString(c.Text))
-							}
+				}
+
+				// UserQuery: text from the LAST item only, and only if it's a
+				// user item with text content. Continuation detection mirrors
+				// the messages-array logic: function_call_output tails or
+				// text-less user tails are tool-chain continuations.
+				lastIdx := len(items) - 1
+				lastItem := items[lastIdx]
+				if lastItem.Type == "function_call_output" || lastItem.Type == "function_call" {
+					r.IsContinuation = true
+				} else if lastItem.Role == "user" {
+					var part string
+					for _, c := range lastItem.Content {
+						if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
+							part = userQueryFromString(c.Text)
+							break
 						}
 					}
+					if part != "" {
+						queryParts = append(queryParts, part)
+					} else {
+						r.IsContinuation = true
+					}
+				} else {
+					r.IsContinuation = true
 				}
 			}
 		}
@@ -187,6 +252,13 @@ func ParseRequest(body []byte) *Request {
 		r.UserQuery = strings.Join(queryParts, "\n\n")
 	} else if env.Prompt != "" {
 		r.UserQuery = env.Prompt
+	}
+
+	// Final guard: any inspectable content with no extracted user query is
+	// effectively a no-typed-input request. Covers system-only bodies (context
+	// compaction, sub-agent spawning) that have neither messages nor input.
+	if r.UserQuery == "" && len(r.Prompts) > 0 {
+		r.IsContinuation = true
 	}
 
 	return r
@@ -298,11 +370,12 @@ func userQueryFromContent(raw json.RawMessage) string {
 		}
 	}
 
-	// No <user_query> tag — strip XML from all text blocks and join.
+	// No <user_query> tag — strip harness wrappers, then XML tags, and join.
 	var parts []string
 	for _, b := range blocks {
 		if b.Type == "text" {
-			if t := strings.Join(strings.Fields(xmlTagRe.ReplaceAllString(b.Text, " ")), " "); t != "" {
+			text := stripHarnessWrappers(b.Text)
+			if t := strings.Join(strings.Fields(xmlTagRe.ReplaceAllString(text, " ")), " "); t != "" {
 				parts = append(parts, t)
 			}
 		}
@@ -324,11 +397,13 @@ func extractUserQueryTag(s string) string {
 }
 
 // userQueryFromString extracts the user message from a string content field.
-// Uses <user_query> tag when present (Copilot format); otherwise strips XML tags.
+// Uses <user_query> tag when present (Copilot format); otherwise strips
+// harness wrapper blocks and XML tags so the result is the user's actual text.
 func userQueryFromString(s string) string {
 	if t := extractUserQueryTag(s); t != "" {
 		return t
 	}
+	s = stripHarnessWrappers(s)
 	return strings.Join(strings.Fields(xmlTagRe.ReplaceAllString(s, " ")), " ")
 }
 

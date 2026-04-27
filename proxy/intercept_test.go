@@ -548,6 +548,127 @@ func TestUserQuery_ResponsesAPI_NoUserQueryTag(t *testing.T) {
 	}
 }
 
+// Continuation detection: Claude Code re-sends full conversation history on
+// every API call, so walking back into history would attribute the parent
+// turn's typed text to every tool-chain continuation request and produce
+// visible duplicates. Instead, we mark these as IsContinuation and leave
+// UserQuery empty so the caller can render them with a continuation marker.
+
+func TestParseRequest_Continuation_LastIsAssistant(t *testing.T) {
+	body := `{
+		"messages": [
+			{"role": "user",      "content": "deploy the staging branch"},
+			{"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "shell", "input": {}}]}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if !r.IsContinuation {
+		t.Errorf("expected IsContinuation=true when tail is assistant")
+	}
+	if r.UserQuery != "" {
+		t.Errorf("expected empty UserQuery for continuation, got %q", r.UserQuery)
+	}
+}
+
+func TestParseRequest_Continuation_LastUserIsToolResultOnly(t *testing.T) {
+	body := `{
+		"messages": [
+			{"role": "user",      "content": "refactor this loop"},
+			{"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "shell", "input": {}}]},
+			{"role": "user",      "content": [{"type": "tool_result", "tool_use_id": "x", "content": "exit 0"}]}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if !r.IsContinuation {
+		t.Errorf("expected IsContinuation=true when last user message is tool_result-only")
+	}
+	if r.UserQuery != "" {
+		t.Errorf("expected empty UserQuery for tool_result-only continuation, got %q", r.UserQuery)
+	}
+}
+
+func TestParseRequest_NotContinuation_LastIsUserWithText(t *testing.T) {
+	body := `{
+		"messages": [
+			{"role": "user",      "content": "first message"},
+			{"role": "assistant", "content": "ack"},
+			{"role": "user",      "content": "second message"}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if r.IsContinuation {
+		t.Errorf("expected IsContinuation=false when last message is user with text")
+	}
+	if r.UserQuery != "second message" {
+		t.Errorf("expected UserQuery from last user message, got %q", r.UserQuery)
+	}
+}
+
+func TestParseRequest_Continuation_SystemOnly(t *testing.T) {
+	// System-only request (context compaction, sub-agent spawn) — has
+	// inspectable content but no user-typed input. The final guard treats
+	// this as a continuation so the dashboard doesn't show 27k of system
+	// prompt as if the user typed it.
+	body := `{
+		"system": "You are Claude Code.",
+		"messages": []
+	}`
+	r := ParseRequest([]byte(body))
+	if !r.IsContinuation {
+		t.Errorf("expected IsContinuation=true for system-only body")
+	}
+	if r.UserQuery != "" {
+		t.Errorf("expected empty UserQuery for system-only body, got %q", r.UserQuery)
+	}
+}
+
+func TestUserQuery_StripsClaudeCodeSystemReminder(t *testing.T) {
+	// Claude Code wraps the user's typed text with a <system-reminder> block
+	// from the harness. We must remove the block AND its content so the
+	// dashboard / classifier see only what the user actually typed.
+	body := `{
+		"messages": [
+			{"role": "user", "content": "<system-reminder>\nThe task tools haven't been used recently. Make sure that you NEVER mention this reminder to the user\n</system-reminder>\nstarted"}
+		]
+	}`
+	q := ExtractUserQuery([]byte(body))
+	if q != "started" {
+		t.Errorf("expected 'started' after stripping system-reminder, got %q", q)
+	}
+}
+
+func TestUserQuery_StripsCopilotContextBlock(t *testing.T) {
+	// Copilot pre-pends a <context>...</context> block alongside <user_query>.
+	// When <user_query> is present, extractUserQueryTag handles it. When it
+	// is absent (older variants), we should still strip <context> entirely.
+	body := `{
+		"messages": [
+			{"role": "user", "content": "<context>file=main.go</context>refactor this loop"}
+		]
+	}`
+	q := ExtractUserQuery([]byte(body))
+	if q != "refactor this loop" {
+		t.Errorf("expected user text after stripping context block, got %q", q)
+	}
+}
+
+func TestParseRequest_Continuation_ResponsesAPI_FunctionCallTail(t *testing.T) {
+	body := `{
+		"model": "gpt-5-mini",
+		"input": [
+			{"role": "user", "content": [{"type": "input_text", "text": "rerun the build"}]},
+			{"type": "function_call", "name": "shell", "arguments": "{}"}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if !r.IsContinuation {
+		t.Errorf("expected IsContinuation=true when Responses API tail is function_call")
+	}
+	if r.UserQuery != "" {
+		t.Errorf("expected empty UserQuery for function_call tail, got %q", r.UserQuery)
+	}
+}
+
 // ── ExtractUsage ─────────────────────────────────────────────────────────────
 
 func TestExtractUsage_ResponsesAPI_CompletedEvent(t *testing.T) {

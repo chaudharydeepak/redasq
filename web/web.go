@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,24 +18,43 @@ import (
 // Version is displayed in the dashboard header. Set from main via web.Version = version.
 var Version = "dev"
 
+// MLClassifier is the minimal interface the web layer needs to call the
+// classifier sidecar. Defined here so the web package doesn't import mlclient
+// (avoids a cycle in tests).
+type MLClassifier interface {
+	Classify(ctx context.Context, text string) (any, error)
+	URL() string
+}
+
+// MLAdapter wraps any client whose Classify returns a typed prediction so the
+// web package can call it through the MLClassifier interface above.
+type MLAdapter struct {
+	URLValue   string
+	ClassifyFn func(ctx context.Context, text string) (any, error)
+}
+
+func (a *MLAdapter) URL() string                                        { return a.URLValue }
+func (a *MLAdapter) Classify(ctx context.Context, text string) (any, error) { return a.ClassifyFn(ctx, text) }
+
 // NewHandler builds and returns the dashboard HTTP handler without starting a server.
-// Used directly in tests via httptest.NewServer.
-func NewHandler(db *store.Store, eng *inspector.Engine, configPath string) http.Handler {
+// Used directly in tests via httptest.NewServer. Pass nil ml to disable ML routes.
+func NewHandler(db *store.Store, eng *inspector.Engine, configPath string, ml MLClassifier) http.Handler {
 	mux := http.NewServeMux()
-	registerRoutes(mux, db, eng, configPath)
+	registerRoutes(mux, db, eng, configPath, ml)
 	return mux
 }
 
 // Start runs the web dashboard on the given port. Non-blocking.
-func Start(port int, db *store.Store, eng *inspector.Engine, configPath string) {
+// ml is optional — pass nil to disable the ML dry-run endpoint.
+func Start(port int, db *store.Store, eng *inspector.Engine, configPath string, ml MLClassifier) {
 	mux := http.NewServeMux()
-	registerRoutes(mux, db, eng, configPath)
+	registerRoutes(mux, db, eng, configPath, ml)
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
 	log.Printf("dashboard: http://localhost:%d", port)
 	go func() { log.Fatal(srv.ListenAndServe()) }()
 }
 
-func registerRoutes(mux *http.ServeMux, db *store.Store, eng *inspector.Engine, configPath string) {
+func registerRoutes(mux *http.ServeMux, db *store.Store, eng *inspector.Engine, configPath string, ml MLClassifier) {
 	mux.HandleFunc("/api/prompts", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			if err := db.DeleteAllPrompts(); err != nil {
@@ -97,6 +117,9 @@ func registerRoutes(mux *http.ServeMux, db *store.Store, eng *inspector.Engine, 
 	mux.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {
 		apiScan(w, r, eng)
 	})
+	mux.HandleFunc("/api/classify", func(w http.ResponseWriter, r *http.Request) {
+		apiClassify(w, r, ml)
+	})
 	mux.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -153,6 +176,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 		Client         string            `json:"client"`
 		Model          string            `json:"model"`
 		LLMResponse    string            `json:"llm_response,omitempty"`
+		MLPrediction   json.RawMessage   `json:"ml_prediction,omitempty"`
 	}
 	out := make([]row, 0, len(prompts))
 	for _, p := range prompts {
@@ -167,6 +191,10 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 			} else if maxSev == "" {
 				maxSev = m.Severity
 			}
+		}
+		var mlRaw json.RawMessage
+		if p.MLPrediction != "" && json.Valid([]byte(p.MLPrediction)) {
+			mlRaw = json.RawMessage(p.MLPrediction)
 		}
 		out = append(out, row{
 			ID:             p.ID,
@@ -187,6 +215,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 			Client:         p.Client,
 			Model:          p.Model,
 			LLMResponse:    truncate(p.LLMResponse, 800),
+			MLPrediction:   mlRaw,
 		})
 	}
 	type response struct {
@@ -386,6 +415,35 @@ Total     : %d prompts (%d blocked, %d redacted)
 			text,
 		)
 	}
+}
+
+// apiClassify is a dry-run ML classifier tester. Calls the running sidecar
+// against submitted text and returns the prediction. Returns {available:false}
+// when no sidecar is configured so the UI can show "ML disabled".
+func apiClassify(w http.ResponseWriter, r *http.Request, ml MLClassifier) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if ml == nil {
+		jsonResponse(w, map[string]any{"available": false, "reason": "ML sidecar not configured"})
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Text == "" {
+		http.Error(w, "invalid JSON or empty text", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	pred, err := ml.Classify(ctx, body.Text)
+	if err != nil {
+		jsonResponse(w, map[string]any{"available": true, "error": err.Error()})
+		return
+	}
+	jsonResponse(w, map[string]any{"available": true, "prediction": pred})
 }
 
 // apiScan is a dry-run rule tester — runs the inspector against submitted text
@@ -691,12 +749,13 @@ var dashboardHTML = `<!DOCTYPE html>
   .pg-tbl th:nth-child(3) { width: 190px; }  /* Host */
   .pg-tbl th:nth-child(4) { width: 110px; }  /* Path */
   .pg-tbl th:nth-child(5) { width: 140px; }  /* Rules Hit */
-  .pg-tbl th:nth-child(6) { width: 65px; }   /* Latency */
-  .pg-tbl th:nth-child(7) { width: 120px; }  /* Tokens in/out */
-  .pg-tbl th:nth-child(8) { width: 44px; text-align:center; }  /* CTX */
-  .pg-tbl th:nth-child(9) { width: 85px; }   /* Session */
-  .pg-tbl th:nth-child(10){ width: 160px; }  /* Client */
-  .pg-tbl th:nth-child(11){ width: 140px; }  /* Model */
+  .pg-tbl th:nth-child(6) { width: 110px; }  /* Intent (ML) */
+  .pg-tbl th:nth-child(7) { width: 65px; }   /* Latency */
+  .pg-tbl th:nth-child(8) { width: 120px; }  /* Tokens in/out */
+  .pg-tbl th:nth-child(9) { width: 44px; text-align:center; }  /* CTX */
+  .pg-tbl th:nth-child(10){ width: 85px; }   /* Session */
+  .pg-tbl th:nth-child(11){ width: 160px; }  /* Client */
+  .pg-tbl th:nth-child(12){ width: 140px; }  /* Model */
   /* Column headers: tighter letter-spacing, standard Datadog table header style */
   .pg-tbl th { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
                color: var(--text-3); padding: 8px 16px; border-bottom: 1px solid var(--border);
@@ -937,7 +996,7 @@ var dashboardHTML = `<!DOCTYPE html>
   <div id="tester-results" style="margin-top:18px;display:none">
     <div style="border-top:1px solid var(--border);padding-top:14px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-        <span style="font-size:12px;font-weight:600;color:var(--text-2)">Result:</span>
+        <span style="font-size:12px;font-weight:600;color:var(--text-2)">Rules Result:</span>
         <span id="tester-status-badge" style="font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:4px"></span>
       </div>
       <div id="tester-matches" style="display:none;margin-bottom:12px"></div>
@@ -947,6 +1006,7 @@ var dashboardHTML = `<!DOCTYPE html>
           border-radius:6px;padding:10px 12px;font-size:12px;color:var(--text-2);
           white-space:pre-wrap;word-break:break-all;margin:0;max-height:220px;overflow:auto"></pre>
       </div>
+      <div id="tester-ml" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)"></div>
     </div>
   </div>
 </div>
@@ -1040,6 +1100,7 @@ var dashboardHTML = `<!DOCTYPE html>
                 <th>Host</th>
                 <th>Path</th>
                 <th>Rules Hit</th>
+                <th>Intent (ML)</th>
                 <th>Latency</th>
                 <th>Tokens (in/out)</th>
                 <th style="text-align:center">CTX</th>
@@ -1049,7 +1110,7 @@ var dashboardHTML = `<!DOCTYPE html>
               </tr>
             </thead>
             <tbody id="prompts-body">
-              <tr class="empty"><td colspan="11">No prompts intercepted yet</td></tr>
+              <tr class="empty"><td colspan="12">No prompts intercepted yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -1237,16 +1298,58 @@ function toggleDetail(id) {
       '</div>';
   }
 
+  var mlSection = '';
+  if (p.ml_prediction && p.ml_prediction.scores) {
+    var ml = p.ml_prediction;
+    var above = ml.above_threshold || [];
+    var topPct = Math.round((ml.top_score||0)*100);
+    if (above.length === 0) {
+      // Nothing crossed any per-intent threshold — don't render bars, they
+      // give the false impression that ML is "firing on six categories".
+      // A single subdued line communicates "classifier ran, nothing flagged".
+      mlSection =
+        '<div class="detail-section-lbl" style="margin-top:14px;margin-bottom:6px">'+
+          'Intent classifier <span style="color:var(--text-3);font-weight:400">— '+
+          'nothing flagged (top guess: '+esc(ml.top_label||'—')+' '+topPct+'%) &middot; '+
+          (ml.latency_ms||0)+'ms</span>'+
+        '</div>';
+    } else {
+      // Real hit — show the breakdown so the operator can see which labels
+      // crossed and how decisively.
+      var rows = Object.keys(ml.scores).map(function(label){
+        var score = ml.scores[label] || 0;
+        var pct = Math.round(score*100);
+        var hot = above.indexOf(label) >= 0;
+        var col = hot ? '#ef4444' : pct >= 70 ? '#f59e0b' : 'var(--text-2)';
+        var bar = '<div style="flex:1;height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden">'+
+                  '<div style="height:100%;width:'+pct+'%;background:'+col+'"></div></div>';
+        return '<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;margin:3px 0">'+
+          '<div class="mono" style="width:160px;color:'+col+(hot?';font-weight:600':'')+'">'+esc(label)+(hot?' ●':'')+'</div>'+
+          bar+
+          '<div class="mono" style="width:42px;text-align:right;color:'+col+'">'+pct+'%</div>'+
+        '</div>';
+      }).join('');
+      mlSection =
+        '<div class="detail-section-lbl" style="margin-top:14px;margin-bottom:6px">'+
+          'Intent classifier <span style="color:#ef4444;font-weight:600">— '+
+          above.length+' above threshold: '+above.map(esc).join(', ')+'</span>'+
+          '<span style="color:var(--text-3);font-weight:400"> &middot; '+(ml.latency_ms||0)+'ms</span>'+
+        '</div>'+
+        '<div style="padding:8px 10px;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:6px">'+rows+'</div>';
+    }
+  }
+
   var detail = document.createElement('tr');
   detail.id = 'detail-'+id;
   detail.className = 'detail-row';
   var td = document.createElement('td');
-  td.colSpan = 11;
+  td.colSpan = 12;
   td.innerHTML =
     '<div class="detail-wrap">' +
       banner + promptSection + llmSection + tokenInfo +
       '<div class="detail-section-lbl" style="margin-top:14px;margin-bottom:6px">Matched Rules</div>' +
       '<div class="match-list">'+matchHTML+'</div>' +
+      mlSection +
     '</div>';
   detail.appendChild(td);
   anchor.after(detail);
@@ -1302,7 +1405,7 @@ async function refresh() {
     var wasOpen = openRow;
 
     document.getElementById('prompts-body').innerHTML = prompts.length === 0
-      ? '<tr class="empty"><td colspan="11">' +
+      ? '<tr class="empty"><td colspan="12">' +
           (currentFilter !== 'all'
             ? 'No ' + esc(currentFilter) + ' prompts in this time window.'
             : 'No prompts intercepted yet.<br><span style="font-size:12px;font-weight:400">Route your AI traffic through the proxy to start seeing requests here.</span>'
@@ -1344,12 +1447,34 @@ async function refresh() {
           var modelCell = modelVal
             ? '<td class="mono muted" title="'+esc(modelVal)+'">'+esc(modelVal)+'</td>'
             : '<td class="mono muted" style="color:var(--text-3)">—</td>';
+          var intentCell = (function(){
+            var ml = p.ml_prediction;
+            // No prediction at all (sidecar wasn't reachable when row was saved).
+            if (!ml || !ml.scores) return '<td style="color:var(--text-3)">—</td>';
+            var above = ml.above_threshold || [];
+            // Nothing crossed a per-intent threshold → classifier says "clean".
+            // Show a faint dot with the top label in the tooltip so debugging
+            // is still possible, but don't let it look like a hit on the row.
+            if (above.length === 0) {
+              var pct = Math.round((ml.top_score||0)*100);
+              var tip = 'classifier: nothing flagged • top='+ml.top_label+' '+pct+'% • '+(ml.latency_ms||0)+'ms';
+              return '<td class="mono" title="'+esc(tip)+'" style="color:var(--text-3);font-size:11px">·</td>';
+            }
+            // One or more labels above threshold → render them red.
+            var topPct = Math.round((ml.top_score||0)*100);
+            var label = above[0];
+            var rest = above.length > 1 ? ' +'+(above.length-1) : '';
+            var tip = 'above threshold: '+above.join(', ')+' • top='+ml.top_label+' '+topPct+'% • '+(ml.latency_ms||0)+'ms';
+            return '<td class="mono" title="'+esc(tip)+'" style="color:#ef4444;font-size:11px">'
+              + esc(label) + rest + ' <span style="color:var(--text-3)">'+topPct+'%</span></td>';
+          })();
           return '<tr id="row-'+p.id+'" class="row-'+p.status+'" onclick="toggleDetail('+p.id+')">' +
             '<td class="mono muted"><span style="display:block;font-size:10px;color:var(--text-3);margin-bottom:1px">#'+p.id+'</span>'+esc(p.time)+'</td>' +
             '<td>'+statusTag(p.status)+agentBadge+'</td>' +
             '<td class="td-host" title="'+esc(p.host)+'">'+esc(p.host)+'</td>' +
             '<td class="mono muted td-path" title="'+esc(p.path)+'">'+esc(shortPath)+'</td>' +
             '<td>'+rulesHTML+'</td>' +
+            intentCell +
             '<td class="mono muted td-r">'+dur+'</td>' +
             '<td class="mono muted td-r">'+(p.input_tokens||p.output_tokens ? fmtTokens(p.input_tokens||0)+' / '+fmtTokens(p.output_tokens||0) : '—')+'</td>' +
             (function(){
@@ -1693,6 +1818,7 @@ function toggleTester() {
 function clearTester() {
   document.getElementById('tester-input').value = '';
   document.getElementById('tester-results').style.display = 'none';
+  document.getElementById('tester-ml').style.display = 'none';
   document.getElementById('tester-input').focus();
 }
 
@@ -1702,14 +1828,65 @@ async function runScan() {
   var btn = document.getElementById('scan-btn');
   btn.textContent = 'Scanning…'; btn.disabled = true;
   try {
-    var res = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text: text})});
-    var data = await res.json();
-    renderScanResult(data);
+    // Run regex inspector and ML classifier in parallel — both pure dry-runs.
+    var [scanRes, mlRes] = await Promise.all([
+      fetch('/api/scan',     {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text: text})}).then(r => r.json()),
+      fetch('/api/classify', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text: text})}).then(r => r.json()),
+    ]);
+    renderScanResult(scanRes);
+    renderMLResult(mlRes);
   } catch(e) {
     alert('Scan failed: ' + e);
   } finally {
     btn.textContent = 'Scan'; btn.disabled = false;
   }
+}
+
+function renderMLResult(data) {
+  var section = document.getElementById('tester-ml');
+  section.style.display = 'block';
+  if (!data.available) {
+    section.innerHTML = '<div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">ML Classifier</div>' +
+      '<div style="font-size:11.5px;color:var(--text-3)">' + escHtml(data.reason || 'unavailable') + '</div>';
+    return;
+  }
+  if (data.error) {
+    section.innerHTML = '<div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">ML Classifier</div>' +
+      '<div style="font-size:11.5px;color:#e05252">error: ' + escHtml(data.error) + '</div>';
+    return;
+  }
+  var p = data.prediction || {};
+  var above = p.above_threshold || [];
+  var topPct = Math.round((p.top_score||0)*100);
+  var heading;
+  if (above.length) {
+    heading = '<span style="font-size:12px;font-weight:600;color:var(--text-2)">ML Classifier</span> ' +
+      '<span style="color:#e05252;font-weight:600;font-size:11.5px">— ' + above.length + ' above threshold: ' +
+      above.map(escHtml).join(', ') + '</span>' +
+      '<span style="color:var(--text-3);font-weight:400;font-size:11.5px"> &middot; ' + (p.latency_ms||0) + 'ms</span>';
+  } else {
+    heading = '<span style="font-size:12px;font-weight:600;color:var(--text-2)">ML Classifier</span> ' +
+      '<span style="color:var(--text-3);font-weight:400;font-size:11.5px">— nothing above threshold (top guess: ' +
+      escHtml(p.top_label||'—') + ' ' + topPct + '%) &middot; ' + (p.latency_ms||0) + 'ms</span>';
+  }
+  var rows = '';
+  if (p.scores) {
+    rows = Object.keys(p.scores).map(function(label){
+      var score = p.scores[label] || 0;
+      var pct = Math.round(score*100);
+      var hot = above.indexOf(label) >= 0;
+      var col = hot ? '#e05252' : pct >= 70 ? '#c49a2a' : 'var(--text-2)';
+      var bar = '<div style="flex:1;height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden">' +
+                '<div style="height:100%;width:'+pct+'%;background:'+col+'"></div></div>';
+      return '<div style="display:flex;align-items:center;gap:8px;font-size:11px;margin:3px 0">' +
+        '<div class="mono" style="width:160px;color:'+col+(hot?';font-weight:600':'')+'">'+escHtml(label)+(hot?' ●':'')+'</div>' +
+        bar +
+        '<div class="mono" style="width:42px;text-align:right;color:'+col+'">'+pct+'%</div>' +
+      '</div>';
+    }).join('');
+  }
+  section.innerHTML = '<div style="margin-bottom:6px">' + heading + '</div>' +
+    '<div style="padding:8px 10px;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:6px">' + rows + '</div>';
 }
 
 function renderScanResult(data) {

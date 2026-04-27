@@ -1,15 +1,26 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/chaudharydeepak/redasq/inspector"
+	"github.com/chaudharydeepak/redasq/mlclient"
+	"github.com/chaudharydeepak/redasq/mlspawn"
 	"github.com/chaudharydeepak/redasq/proxy"
 	"github.com/chaudharydeepak/redasq/store"
 	"github.com/chaudharydeepak/redasq/web"
@@ -24,6 +35,10 @@ func main() {
 	webPort       := flag.Int("web-port", 7778, "Web dashboard port")
 	caDir         := flag.String("ca-dir", defaultCADir(), "Directory for CA cert/key and database")
 	upstreamProxy := flag.String("upstream-proxy", "", "Corporate proxy to route outbound traffic through (e.g. http://proxy.corp.com:8080)")
+	mlURL         := flag.String("ml-url", os.Getenv("REDASQ_ML_URL"), "External classifier URL; empty means redasq spawns its own sidecar")
+	mlPort        := flag.Int("ml-port", 18001, "Port for the auto-spawned classifier sidecar")
+	mlVenv        := flag.String("ml-venv", os.Getenv("REDASQ_VENV"), "Python venv for the auto-spawned sidecar (default eval/.venv)")
+	noML          := flag.Bool("no-ml", false, "Disable the classifier entirely")
 	debug         := flag.Bool("debug", false, "Enable verbose request/connection logging")
 	flag.Parse()
 
@@ -81,10 +96,132 @@ func main() {
 		log.Printf("agent mode: ON (persisted from last run)")
 	}
 
+	mlClient, sidecar, mlStatus := setupML(*noML, *mlURL, *mlPort, *mlVenv)
+
+	// Sidecar is owned by this process — kill it if redasq is stopped.
+	if sidecar != nil {
+		go func() {
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+			<-sigCh
+			fmt.Fprintln(os.Stderr, "\n→ stopping classifier sidecar")
+			sidecar.Stop()
+			os.Exit(0)
+		}()
+	}
+
 	web.Version = version
-	printSetup(ca.CertPath, *port, *webPort, *upstreamProxy)
-	web.Start(*webPort, db, eng, filepath.Join(*caDir, "rules.json"))
-	log.Fatal(proxy.Start(*port, ca, db, eng, *upstreamProxy))
+	printSetup(ca.CertPath, *port, *webPort, *upstreamProxy, mlStatus)
+
+	// Adapter so the web package can call mlClient without importing it
+	// (avoids dragging the http client into the test binary).
+	var mlAdapter web.MLClassifier
+	if mlClient != nil {
+		c := mlClient
+		mlAdapter = &web.MLAdapter{
+			URLValue: c.URL(),
+			ClassifyFn: func(ctx context.Context, text string) (any, error) {
+				return c.Classify(ctx, text)
+			},
+		}
+	}
+	web.Start(*webPort, db, eng, filepath.Join(*caDir, "rules.json"), mlAdapter)
+	err = proxy.Start(*port, ca, db, eng, mlClient, *upstreamProxy)
+	if sidecar != nil {
+		sidecar.Stop()
+	}
+	log.Fatal(err)
+}
+
+// setupML resolves the ML configuration and either returns an external
+// client, spawns a local sidecar, or disables ML with a clear status string.
+// status is a single line for the startup banner.
+func setupML(disabled bool, externalURL string, port int, venv string) (*mlclient.Client, *mlspawn.Sidecar, string) {
+	if disabled {
+		return nil, nil, "disabled (--no-ml)"
+	}
+	if externalURL != "" {
+		model := fetchModelName(externalURL)
+		return mlclient.New(externalURL, 3*time.Second), nil, fmtMLStatus(externalURL, model, "external")
+	}
+
+	repoRoot := repoRootDir()
+	logPath := filepath.Join(os.TempDir(), "redasq-ml.log")
+
+	fmt.Fprintf(os.Stderr, "→ loading classifier model (one-time, ~10s)... ")
+	side, err := mlspawn.Start(repoRoot, venv, port, logPath, 60*time.Second)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "skipped")
+		if errors.Is(err, mlspawn.ErrNoVenv) {
+			hint := mlspawn.VenvSetupHint(venv)
+			return nil, nil, "disabled (no venv) — set up with: " + hint
+		}
+		log.Printf("ml: sidecar failed to start: %v", err)
+		return nil, nil, "disabled (sidecar failed — see " + logPath + ")"
+	}
+	model := fetchModelName(side.URL)
+	fmt.Fprintf(os.Stderr, "✓ ready (pid %d, model=%s)\n", side.PID(), modelOrDash(model))
+	return mlclient.New(side.URL, 3*time.Second), side, fmtMLStatus(side.URL, model, "managed")
+}
+
+// fetchModelName queries the sidecar's /health endpoint and returns the
+// "model" field. Empty on any error — callers display "—" then.
+func fetchModelName(classifyURL string) string {
+	u, err := url.Parse(classifyURL)
+	if err != nil {
+		return ""
+	}
+	healthURL := strings.TrimSuffix(u.String(), u.Path) + "/health"
+	c := &http.Client{Timeout: 2 * time.Second}
+	resp, err := c.Get(healthURL)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var body struct {
+		Status string `json:"status"`
+		Model  string `json:"model"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return ""
+	}
+	return body.Model
+}
+
+func fmtMLStatus(url, model, mode string) string {
+	if model == "" {
+		return fmt.Sprintf("%s  ✓ ready (%s)", url, mode)
+	}
+	return fmt.Sprintf("%s  ✓ ready (%s, model=%s)", url, mode, model)
+}
+
+func modelOrDash(model string) string {
+	if model == "" {
+		return "—"
+	}
+	return model
+}
+
+// repoRootDir returns the directory the binary was launched from, falling
+// back to the directory containing the executable. The Python sidecar is
+// spawned with this as its working directory so it can find ml/.
+func repoRootDir() string {
+	if cwd, err := os.Getwd(); err == nil {
+		if _, err := os.Stat(filepath.Join(cwd, "ml", "classifier_server.py")); err == nil {
+			return cwd
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		if _, err := os.Stat(filepath.Join(dir, "ml", "classifier_server.py")); err == nil {
+			return dir
+		}
+	}
+	cwd, _ := os.Getwd()
+	return cwd
 }
 
 func defaultCADir() string {
@@ -92,7 +229,7 @@ func defaultCADir() string {
 	return filepath.Join(home, ".redasq")
 }
 
-func printSetup(certPath string, port, webPort int, upstreamProxy string) {
+func printSetup(certPath string, port, webPort int, upstreamProxy, mlStatus string) {
 	fmt.Println("\n┌─────────────────────────────────────────┐")
 	fmt.Printf( "│        Redasq %-20s│\n", version)
 	fmt.Println("└─────────────────────────────────────────┘")
@@ -120,5 +257,6 @@ func printSetup(certPath string, port, webPort int, upstreamProxy string) {
 	if upstreamProxy != "" {
 		fmt.Printf("Upstream:   %s\n", upstreamProxy)
 	}
+	fmt.Printf("ML:         %s\n", mlStatus)
 	fmt.Println()
 }

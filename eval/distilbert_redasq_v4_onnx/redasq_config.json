@@ -1,0 +1,20 @@
+{
+  "model_name": "distilbert_redasq_v4",
+  "labels": [
+    "pii",
+    "infrastructure",
+    "key_material",
+    "auth_token",
+    "service_credential",
+    "generic_credential"
+  ],
+  "max_length": 512,
+  "thresholds": {
+    "pii": 0.9,
+    "infrastructure": 0.85,
+    "key_material": 0.85,
+    "auth_token": 0.85,
+    "service_credential": 0.9,
+    "generic_credential": 0.95
+  }
+}

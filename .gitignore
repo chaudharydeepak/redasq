@@ -4,3 +4,40 @@ prompt-guard
 prompt-guard-kb.txt
 roadmap.txt
 redasq
+
+# Internal session notes — local only
+REDASQ_KB.md
+
+# ML workspace
+# Default-ignore everything under eval/ and ml/, then selectively un-ignore
+# the artifacts a fresh clone needs to run redasq with ML enabled out of the
+# box (the quantized ONNX runtime model + the sidecar scripts).
+eval/*
+ml/*
+
+# But DO commit:
+#   - ML scripts + Python deps so the sidecar can start
+!ml/server.py
+!ml/classifier_server.py
+!ml/requirements.txt
+#   - Training / eval scripts and the held-out test sets
+!eval/*.py
+!eval/eval_test_set.json
+!eval/v5_eval_set.json
+!eval/EC2_SETUP.md
+#   - The runtime ONNX model (currently v5; future versions added explicitly)
+!eval/distilbert_redasq_v5_onnx/
+!eval/distilbert_redasq_v4_onnx/
+
+# *.onnx is otherwise ignored elsewhere in the repo (e.g. local exports).
+# Inside the v5/v4 onnx dirs the un-ignore above wins.
+*.onnx
+!eval/distilbert_redasq_v5_onnx/*.onnx
+!eval/distilbert_redasq_v4_onnx/*.onnx
+
+# Sensitive-shape patterns we never want committed even by accident
+*.pem
+*.key
+
+# macOS noise
+.DS_Store

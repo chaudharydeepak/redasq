@@ -23,7 +23,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	eng := inspector.New()
-	srv := httptest.NewServer(web.NewHandler(db, eng, filepath.Join(dir, "rules.json")))
+	srv := httptest.NewServer(web.NewHandler(db, eng, filepath.Join(dir, "rules.json"), nil))
 	t.Cleanup(func() { srv.Close() })
 	return srv, db
 }

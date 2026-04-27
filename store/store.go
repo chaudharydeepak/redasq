@@ -37,6 +37,7 @@ type Prompt struct {
 	Client         string
 	Model          string
 	LLMResponse    string // stored when status=redacted; full text, no truncation
+	MLPrediction   string // JSON blob from the classifier sidecar; empty if unavailable
 }
 
 type Store struct {
@@ -75,7 +76,8 @@ func (s *Store) migrate() error {
 			session_id       TEXT    NOT NULL DEFAULT '',
 			client           TEXT    NOT NULL DEFAULT '',
 			model            TEXT    NOT NULL DEFAULT '',
-			llm_response     TEXT    NOT NULL DEFAULT ''
+			llm_response     TEXT    NOT NULL DEFAULT '',
+			ml_prediction    TEXT    NOT NULL DEFAULT ''
 		);
 		CREATE TABLE IF NOT EXISTS settings (
 			key   TEXT PRIMARY KEY,
@@ -97,6 +99,7 @@ func (s *Store) migrate() error {
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN client TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN model TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN llm_response TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE prompts ADD COLUMN ml_prediction TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -150,6 +153,12 @@ func (s *Store) UpdateLLMResponse(id int64, response string) error {
 	return err
 }
 
+// UpdateMLPrediction stores the JSON-encoded classifier prediction for a prompt.
+func (s *Store) UpdateMLPrediction(id int64, prediction string) error {
+	_, err := s.db.Exec(`UPDATE prompts SET ml_prediction=? WHERE id=?`, prediction, id)
+	return err
+}
+
 func (s *Store) CountPrompts(statusFilter, search string) (int, error) {
 	var n int
 	var err error
@@ -172,7 +181,7 @@ func (s *Store) CountPrompts(statusFilter, search string) (int, error) {
 }
 
 func (s *Store) ListPrompts(statusFilter, search string, limit, offset int) ([]Prompt, error) {
-	const sel = `SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client, model, llm_response FROM prompts`
+	const sel = `SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client, model, llm_response, ml_prediction FROM prompts`
 	like := "%" + search + "%"
 	var (
 		rows *sql.Rows
@@ -199,13 +208,13 @@ func (s *Store) ListPrompts(statusFilter, search string, limit, offset int) ([]P
 
 func (s *Store) GetPrompt(id int64) (*Prompt, error) {
 	row := s.db.QueryRow(
-		`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client, model, llm_response FROM prompts WHERE id = ?`, id,
+		`SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client, model, llm_response, ml_prediction FROM prompts WHERE id = ?`, id,
 	)
 	var p Prompt
 	var ts int64
 	var matchJSON string
 	var agentModeInt int
-	if err := row.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt, &p.InputTokens, &p.OutputTokens, &p.SessionID, &p.Client, &p.Model, &p.LLMResponse); err != nil {
+	if err := row.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt, &p.InputTokens, &p.OutputTokens, &p.SessionID, &p.Client, &p.Model, &p.LLMResponse, &p.MLPrediction); err != nil {
 		return nil, err
 	}
 	p.Timestamp = time.Unix(ts, 0)
@@ -221,7 +230,7 @@ func scanPrompts(rows *sql.Rows) ([]Prompt, error) {
 		var ts int64
 		var matchJSON string
 		var agentModeInt int
-		if err := rows.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt, &p.InputTokens, &p.OutputTokens, &p.SessionID, &p.Client, &p.Model, &p.LLMResponse); err != nil {
+		if err := rows.Scan(&p.ID, &ts, &p.Host, &p.Path, &p.Prompt, &p.Status, &matchJSON, &p.RedactedPrompt, &p.DurationMS, &agentModeInt, &p.InputTokens, &p.OutputTokens, &p.SessionID, &p.Client, &p.Model, &p.LLMResponse, &p.MLPrediction); err != nil {
 			return nil, err
 		}
 		p.Timestamp = time.Unix(ts, 0)
@@ -333,7 +342,7 @@ func min(a, b int) int {
 func (s *Store) ExportPrompts(from, to time.Time) ([]Prompt, error) {
 	var rows *sql.Rows
 	var err error
-	const sel = `SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client, model, llm_response FROM prompts`
+	const sel = `SELECT id, timestamp, host, path, prompt, status, matches, redacted_prompt, duration_ms, agent_mode, input_tokens, output_tokens, session_id, client, model, llm_response, ml_prediction FROM prompts`
 	switch {
 	case !from.IsZero() && !to.IsZero():
 		rows, err = s.db.Query(sel+` WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC`, from.Unix(), to.Unix())
