@@ -23,7 +23,8 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 SOURCES = [
     ROOT / "intent_data_v4.jsonl",         # full v4 training corpus (~43K)
-    ROOT / "conversation_data.jsonl",      # v6-regenerated (~4.8K)
+    ROOT / "conversation_data.jsonl",      # v6-regenerated (~4.8K, template-based)
+    ROOT / "llm_generated_data.jsonl",     # gen_llm_dataset.py output (~10K, natural-phrasing)
 ]
 OUT = ROOT / "intent_data_v6.jsonl"
 
