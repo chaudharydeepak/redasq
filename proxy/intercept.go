@@ -44,6 +44,7 @@ type Request struct {
 	SessionID      string   // Anthropic session ID from metadata.user_id
 	Prompts        []string // inspectable text, current turn only (for rule matching)
 	UserQuery      string   // user's typed message only (for dashboard display)
+	CurrentTurn    string   // current-turn content (user text + tool_result bodies) excluding system prompt — for ML classification
 	Background     bool     // Copilot internal call (title / summary) — never block
 	IsContinuation bool     // tool-chain continuation request (no new user-typed text)
 }
@@ -90,6 +91,11 @@ func ParseRequest(body []byte) *Request {
 
 	var rawTexts []string
 	var queryParts []string
+	// currentTurnTexts captures only message-array content from the current turn,
+	// deliberately excluding the system prompt. This is what ML classifies — the
+	// system prompt is huge boilerplate (Claude Code's ~25k system message) that
+	// would drown the real signal in DistilBERT's 512-token window.
+	var currentTurnTexts []string
 
 	// System prompt (Anthropic) — always inspect. Clients like Copilot refresh it
 	// on every request with current file context, so secrets can appear at any turn.
@@ -119,7 +125,9 @@ func ParseRequest(body []byte) *Request {
 		}
 		for i := lastAsst + 1; i < len(env.Messages); i++ {
 			msg := env.Messages[i]
-			rawTexts = append(rawTexts, extractContentText(msg.Content)...)
+			msgTexts := extractContentText(msg.Content)
+			rawTexts = append(rawTexts, msgTexts...)
+			currentTurnTexts = append(currentTurnTexts, msgTexts...)
 			if msg.Role == "user" {
 				// Copilot background detection: internal calls (title generation,
 				// summarization, progress) use plain string content with known prefixes.
@@ -202,11 +210,13 @@ func ParseRequest(body []byte) *Request {
 						if item.Type == "function_call_output" {
 							if t := strings.TrimSpace(item.Output); t != "" {
 								rawTexts = append(rawTexts, t)
+								currentTurnTexts = append(currentTurnTexts, t)
 							}
 						} else {
 							for _, c := range item.Content {
 								if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
 									rawTexts = append(rawTexts, strings.TrimSpace(c.Text))
+									currentTurnTexts = append(currentTurnTexts, strings.TrimSpace(c.Text))
 								}
 							}
 						}
@@ -247,11 +257,16 @@ func ParseRequest(body []byte) *Request {
 	}
 
 	r.Prompts = cleanTexts(rawTexts)
+	r.CurrentTurn = strings.Join(cleanTexts(currentTurnTexts), "\n\n")
 
 	if len(queryParts) > 0 {
 		r.UserQuery = strings.Join(queryParts, "\n\n")
 	} else if env.Prompt != "" {
 		r.UserQuery = env.Prompt
+		// Legacy /v1/completions API has no message structure — Prompt is the user's input.
+		if r.CurrentTurn == "" {
+			r.CurrentTurn = env.Prompt
+		}
 	}
 
 	// Final guard: any inspectable content with no extracted user query is

@@ -284,12 +284,17 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 
 		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, displayPrompt, redactions, allowBlock, sessionID, client, parsed.Model)
 
-		// Fire classifier in parallel with the upstream call, but only on
-		// requests that actually carry new user-typed text. Skipping
-		// continuations avoids redundant predictions on borrowed context.
+		// Fire classifier in parallel with the upstream call. We feed user-typed
+		// text first, falling back to current-turn content (tool_result bodies,
+		// function_call outputs, etc.) so anything regex inspects also gets ML
+		// coverage. The system prompt is deliberately excluded — it's huge
+		// boilerplate that drowns the signal in DistilBERT's 512-token window.
 		const mlMaxChars = 4000
-		if savedID > 0 && p.ml != nil && !parsed.IsContinuation && parsed.UserQuery != "" {
-			mlText := parsed.UserQuery
+		mlText := parsed.UserQuery
+		if mlText == "" {
+			mlText = parsed.CurrentTurn
+		}
+		if savedID > 0 && p.ml != nil && mlText != "" {
 			if len(mlText) > mlMaxChars {
 				mlText = mlText[:mlMaxChars]
 			}

@@ -652,6 +652,51 @@ func TestUserQuery_StripsCopilotContextBlock(t *testing.T) {
 	}
 }
 
+// CurrentTurn must contain tool_result content so ML classifies it
+// symmetrically with regex. System prompt content stays out (would drown
+// DistilBERT's 512-token window in Claude Code boilerplate).
+func TestParseRequest_CurrentTurn_IncludesToolResult(t *testing.T) {
+	body := `{
+		"system": "You are Claude Code. Long boilerplate system prompt that should NOT appear in CurrentTurn.",
+		"messages": [
+			{"role": "user",      "content": "read my .env"},
+			{"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "Read", "input": {"path": ".env"}}]},
+			{"role": "user",      "content": [{"type": "tool_result", "tool_use_id": "x", "content": "DB_PASSWORD=hunter2_2026"}]}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if !strings.Contains(r.CurrentTurn, "DB_PASSWORD=hunter2_2026") {
+		t.Errorf("CurrentTurn missing tool_result content: %q", r.CurrentTurn)
+	}
+	if strings.Contains(r.CurrentTurn, "boilerplate system prompt") {
+		t.Errorf("CurrentTurn should not include system prompt: %q", r.CurrentTurn)
+	}
+	// IsContinuation still flags this (no new user text), but ML should
+	// still run on CurrentTurn — that's the symmetry fix.
+	if !r.IsContinuation {
+		t.Errorf("expected IsContinuation=true for tool-result tail")
+	}
+}
+
+func TestParseRequest_CurrentTurn_ResponsesAPI_FunctionCallOutput(t *testing.T) {
+	body := `{
+		"model": "gpt-5-mini",
+		"instructions": "You are the GitHub Copilot CLI. Big system prompt that should NOT appear in CurrentTurn.",
+		"input": [
+			{"role": "user", "content": [{"type": "input_text", "text": "list aws credentials"}]},
+			{"type": "function_call", "name": "shell", "arguments": "{}"},
+			{"type": "function_call_output", "output": "AWS_ACCESS_KEY_ID=AKIATESTKEY12345"}
+		]
+	}`
+	r := ParseRequest([]byte(body))
+	if !strings.Contains(r.CurrentTurn, "AWS_ACCESS_KEY_ID=AKIATESTKEY12345") {
+		t.Errorf("CurrentTurn missing function_call_output: %q", r.CurrentTurn)
+	}
+	if strings.Contains(r.CurrentTurn, "Big system prompt") {
+		t.Errorf("CurrentTurn should not include instructions: %q", r.CurrentTurn)
+	}
+}
+
 func TestParseRequest_Continuation_ResponsesAPI_FunctionCallTail(t *testing.T) {
 	body := `{
 		"model": "gpt-5-mini",
