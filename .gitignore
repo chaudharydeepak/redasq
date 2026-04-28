@@ -25,13 +25,16 @@ ml/*
 !eval/eval_test_set.json
 !eval/v5_eval_set.json
 !eval/EC2_SETUP.md
-#   - The runtime ONNX model (currently v5; future versions added explicitly)
+#   - The runtime ONNX model (classifier_server picks the highest-versioned
+#     dir at startup; future versions added explicitly).
+!eval/distilbert_redasq_v6_onnx/
 !eval/distilbert_redasq_v5_onnx/
 !eval/distilbert_redasq_v4_onnx/
 
 # *.onnx is otherwise ignored elsewhere in the repo (e.g. local exports).
-# Inside the v5/v4 onnx dirs the un-ignore above wins.
+# Inside the un-ignored model dirs the un-ignore below wins.
 *.onnx
+!eval/distilbert_redasq_v6_onnx/*.onnx
 !eval/distilbert_redasq_v5_onnx/*.onnx
 !eval/distilbert_redasq_v4_onnx/*.onnx
 
