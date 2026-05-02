@@ -173,3 +173,82 @@ func TestRedactBody_StructurePreserved(t *testing.T) {
 		t.Errorf("stream changed: got %v", out["stream"])
 	}
 }
+
+
+// ── Field-aware mutation (location-aware history-leak fix) ───────────────────
+
+// TestRedactBody_PreservesProtocolMetadata locks in the textContentFields
+// allowlist behavior: strings outside text-content fields (signature, id,
+// model, type, role, stop_reason, etc.) must never be mutated by the
+// redaction walker, even if a rule pattern would otherwise match them.
+// Mutating these fields would corrupt the upstream API call (signatures
+// invalidate, IDs break tool-call correlation, stop_reasons change semantics).
+func TestRedactBody_PreservesProtocolMetadata(t *testing.T) {
+	eng := New()
+	eng.SetMode("email", ModeTrack)
+
+	// Each of model, signature, id contains an @-shape that the email rule
+	// would otherwise match. They MUST be passed through untouched because
+	// they're protocol metadata, not user content.
+	body := []byte(`{
+		"model": "vendor@some-model-id-v1",
+		"messages": [
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "ok", "signature": "alice@example.com-base64"},
+				{"type": "tool_use", "id": "tool@call-id-12345", "name": "bash"}
+			]},
+			{"role": "user", "content": "ping me at alice@example.com"}
+		]
+	}`)
+	out := string(eng.RedactBodyForForwarding(body))
+
+	// User content email IS replaced.
+	if strings.Contains(out, `"ping me at alice@example.com"`) {
+		t.Errorf("user content email leaked through unredacted: %s", out)
+	}
+	// Protocol metadata fields preserved verbatim.
+	for _, want := range []string{
+		`"vendor@some-model-id-v1"`,         // model field
+		`"alice@example.com-base64"`,        // signature field
+		`"tool@call-id-12345"`,              // id field
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metadata field mutated by walker — %q missing from: %s", want, out)
+		}
+	}
+}
+
+// TestRedactBlockMatchesFromBody_TextOnly verifies the block-mode walker
+// only mutates text-content fields and leaves protocol metadata alone.
+// Used in the location-aware history-leak fix path.
+func TestRedactBlockMatchesFromBody_TextOnly(t *testing.T) {
+	eng := New()
+
+	// Both the user content AND the signature happen to contain SSN-shaped
+	// digit groups. Only the user-content one should be scrubbed.
+	body := []byte(`{
+		"model": "claude-opus-4",
+		"messages": [
+			{"role": "user", "content": "my ssn is 123-45-6789"},
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "ok", "signature": "ABC-99-1234"}
+			]},
+			{"role": "user", "content": "ok continue"}
+		]
+	}`)
+	out := string(eng.RedactBlockMatchesFromBody(body))
+
+	// SSN in user content scrubbed (matches \d{3}-\d{2}-\d{4}).
+	if strings.Contains(out, "123-45-6789") {
+		t.Errorf("user content SSN should be scrubbed: %s", out)
+	}
+	// Signature preserved (looks SSN-ish but is metadata).
+	if !strings.Contains(out, `"ABC-99-1234"`) {
+		t.Errorf("signature mutated by block walker — should be preserved: %s", out)
+	}
+	// JSON still valid.
+	var v interface{}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("block walker produced invalid JSON: %v\nbody: %s", err, out)
+	}
+}

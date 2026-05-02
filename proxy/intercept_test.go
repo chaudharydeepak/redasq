@@ -833,3 +833,88 @@ func TestParseRequest_CopilotCLI_MultiTurn(t *testing.T) {
 		t.Errorf("user query: got %q", r.UserQuery)
 	}
 }
+
+// ── FullBody extraction (location-aware history-leak fix) ────────────────────
+
+// TestParseRequest_FullBody_IncludesAnthropicHistory verifies FullBody captures
+// every message including those before the last assistant turn — the basis for
+// the location-aware history-leak scan.
+func TestParseRequest_FullBody_IncludesAnthropicHistory(t *testing.T) {
+	body := []byte(`{
+		"system": "You are helpful.",
+		"messages": [
+			{"role": "user",      "content": "older user turn"},
+			{"role": "assistant", "content": "older response"},
+			{"role": "user",      "content": "current question"}
+		]
+	}`)
+	r := ParseRequest(body)
+
+	// Prompts (current turn) excludes history — block decision is current-turn only.
+	if !containsNone(r.Prompts, "older user turn", "older response") {
+		t.Errorf("Prompts should NOT contain history: %v", r.Prompts)
+	}
+	if !containsAll(r.Prompts, "current question") {
+		t.Errorf("Prompts should contain current turn: %v", r.Prompts)
+	}
+
+	// FullBody includes everything: history + current turn + system.
+	for _, want := range []string{"older user turn", "older response", "current question", "You are helpful."} {
+		if !containsAll(r.FullBody, want) {
+			t.Errorf("FullBody missing %q: %v", want, r.FullBody)
+		}
+	}
+}
+
+// TestParseRequest_FullBody_IncludesResponsesAPIHistory same check for the
+// OpenAI Responses API (Copilot CLI shape).
+func TestParseRequest_FullBody_IncludesResponsesAPIHistory(t *testing.T) {
+	body := []byte(`{
+		"instructions": "You are CLI.",
+		"input": [
+			{"role": "user",      "content": [{"type": "input_text", "text": "older user turn"}]},
+			{"role": "assistant", "content": [{"type": "text",       "text": "older response"}]},
+			{"role": "user",      "content": [{"type": "input_text", "text": "current question"}]}
+		]
+	}`)
+	r := ParseRequest(body)
+
+	if containsAll(r.Prompts, "older user turn") {
+		t.Errorf("Prompts should NOT contain history: %v", r.Prompts)
+	}
+	if !containsAll(r.Prompts, "current question") {
+		t.Errorf("Prompts should contain current turn: %v", r.Prompts)
+	}
+
+	for _, want := range []string{"older user turn", "older response", "current question", "You are CLI."} {
+		if !containsAll(r.FullBody, want) {
+			t.Errorf("FullBody missing %q: %v", want, r.FullBody)
+		}
+	}
+}
+
+// TestParseRequest_FullBody_IncludesToolResultHistory verifies that tool_result
+// content from earlier turns is in FullBody. This is the unintentional-leak
+// case: agent autonomously fetched sensitive data via a tool, the result lives
+// in history, and full-body scan must see it on subsequent turns.
+func TestParseRequest_FullBody_IncludesToolResultHistory(t *testing.T) {
+	body := []byte(`{
+		"messages": [
+			{"role": "user",      "content": "investigate auth"},
+			{"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "read", "input": {"path": ".env"}}]},
+			{"role": "user",      "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "API_TOKEN=abcdef123"}]},
+			{"role": "assistant", "content": "I see the issue."},
+			{"role": "user",      "content": "ok try again"}
+		]
+	}`)
+	r := ParseRequest(body)
+
+	// Current turn only has the latest user message.
+	if containsAll(r.Prompts, "API_TOKEN=abcdef123") {
+		t.Errorf("Prompts (current turn) should NOT contain historical tool_result: %v", r.Prompts)
+	}
+	// FullBody catches the historical tool_result content.
+	if !containsAll(r.FullBody, "API_TOKEN=abcdef123") {
+		t.Errorf("FullBody should contain historical tool_result content: %v", r.FullBody)
+	}
+}

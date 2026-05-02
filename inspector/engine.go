@@ -6,6 +6,42 @@ import (
 	"sync"
 )
 
+// textContentFields names JSON keys whose string values are user- or
+// assistant-generated text content — the only places redasq should ever
+// rewrite values when forwarding a request. Anything outside this allowlist
+// (signatures, opaque IDs, tool names, type/role discriminators, status
+// strings, model identifiers, …) is API-protocol metadata and gets passed
+// through untouched, so a regex that happens to match a metadata-shaped
+// string can't corrupt the body and break the upstream API call.
+//
+// Cross-vendor coverage: Anthropic /v1/messages, OpenAI /v1/chat/completions,
+// OpenAI Responses /v1/responses (Copilot CLI), and OpenAI-compatible
+// variants (Copilot VS Code).
+//
+// Field origins:
+//   - content       Anthropic + OpenAI message content (string form)
+//   - text          Anthropic content blocks, OpenAI content parts, Responses API content items
+//   - thinking      Anthropic extended-thinking block reasoning text
+//   - tool_result   Anthropic — string form, plus the nested-block recursion target
+//   - output        OpenAI Responses function_call_output payload
+//   - arguments     OpenAI / Responses tool/function call arguments
+//   - system        Anthropic top-level system prompt
+//   - instructions  OpenAI Responses top-level instructions
+//   - input         OpenAI Responses top-level input (string form)
+//   - prompt        Legacy /v1/completions prompt field
+var textContentFields = map[string]bool{
+	"content":      true,
+	"text":         true,
+	"thinking":     true,
+	"tool_result":  true,
+	"output":       true,
+	"arguments":    true,
+	"system":       true,
+	"instructions": true,
+	"input":        true,
+	"prompt":       true,
+}
+
 // Result is the outcome of inspecting a prompt.
 type Result struct {
 	Matches []Match
@@ -146,9 +182,10 @@ func (e *Engine) RedactText(text string) (string, []Match) {
 }
 
 // RedactBodyForForwarding applies track-mode replacements to the raw request body.
-// For JSON bodies it operates on parsed string values only, so the JSON structure
-// is never corrupted. Falls back to plain string replacement for non-JSON bodies.
-// In agent mode all rules are applied regardless of their configured mode.
+// For JSON bodies it operates only on text-content fields (see textContentFields)
+// so the JSON structure and protocol metadata are never corrupted. Falls back to
+// plain string replacement for non-JSON bodies. In agent mode all rules are
+// applied regardless of their configured mode.
 func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -156,7 +193,7 @@ func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 	if json.Valid(body) {
 		var v interface{}
 		if err := json.Unmarshal(body, &v); err == nil {
-			v = e.redactJSONValue(v)
+			v = e.redactJSONValue(v, "")
 			var buf bytes.Buffer
 			enc := json.NewEncoder(&buf)
 			enc.SetEscapeHTML(false)
@@ -166,7 +203,8 @@ func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 		}
 	}
 
-	// Non-JSON fallback (plain text, YAML, etc.)
+	// Non-JSON fallback (plain text, YAML, etc.) — no field context, apply
+	// replacements directly. The textContentFields filter only applies to JSON.
 	s := string(body)
 	for _, rule := range e.rules {
 		if e.agentMode || rule.Mode == ModeTrack {
@@ -185,11 +223,105 @@ func (e *Engine) RedactBodyForForwarding(body []byte) []byte {
 	return []byte(s)
 }
 
-// redactJSONValue recursively walks a decoded JSON value and applies redaction
-// rules to every string leaf. map and slice values are mutated in place.
-func (e *Engine) redactJSONValue(v interface{}) interface{} {
+// RedactBlockMatchesFromBody walks the JSON body and applies block-mode rule
+// patterns to text-content fields only. Used in the location-aware history-leak
+// fix: when a block-mode value sits in conversation history (but not the
+// current turn), the proxy silently scrubs it from the outbound body so the
+// value doesn't leak to upstream — without raising a fresh dashboard alarm
+// or blocking the request entirely.
+//
+// Falls back to plain string replacement for non-JSON bodies. Agent mode is
+// not consulted here — block-mode patterns are applied unconditionally
+// because we've already determined a block-mode rule fired in history; we're
+// just choosing to scrub instead of block to preserve session usability.
+func (e *Engine) RedactBlockMatchesFromBody(body []byte) []byte {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if json.Valid(body) {
+		var v interface{}
+		if err := json.Unmarshal(body, &v); err == nil {
+			v = e.redactBlockJSONValue(v, "")
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(false)
+			if err := enc.Encode(v); err == nil {
+				return bytes.TrimRight(buf.Bytes(), "\n")
+			}
+		}
+	}
+
+	s := string(body)
+	for _, rule := range e.rules {
+		if rule.Mode != ModeBlock {
+			continue
+		}
+		if rule.Validate != nil {
+			s = rule.Pattern.ReplaceAllStringFunc(s, func(m string) string {
+				if rule.Validate(m) {
+					return rule.Replacement
+				}
+				return m
+			})
+		} else {
+			s = rule.Pattern.ReplaceAllString(s, rule.Replacement)
+		}
+	}
+	return []byte(s)
+}
+
+// redactBlockJSONValue mirrors redactJSONValue but applies BLOCK-mode rules
+// rather than TRACK-mode. Used by RedactBlockMatchesFromBody. parentField is
+// the name of the JSON object key that led to this value (or the parent
+// container's key when traversing array elements). Mutation only happens for
+// strings whose parentField is in textContentFields.
+func (e *Engine) redactBlockJSONValue(v interface{}, parentField string) interface{} {
 	switch val := v.(type) {
 	case string:
+		if !textContentFields[parentField] {
+			return val
+		}
+		for _, rule := range e.rules {
+			if rule.Mode != ModeBlock {
+				continue
+			}
+			if rule.Validate != nil {
+				val = rule.Pattern.ReplaceAllStringFunc(val, func(m string) string {
+					if rule.Validate(m) {
+						return rule.Replacement
+					}
+					return m
+				})
+			} else {
+				val = rule.Pattern.ReplaceAllString(val, rule.Replacement)
+			}
+		}
+		return val
+	case map[string]interface{}:
+		for k, v2 := range val {
+			val[k] = e.redactBlockJSONValue(v2, k)
+		}
+		return val
+	case []interface{}:
+		for i, v2 := range val {
+			val[i] = e.redactBlockJSONValue(v2, parentField)
+		}
+		return val
+	default:
+		return v
+	}
+}
+
+// redactJSONValue recursively walks a decoded JSON value and applies redaction
+// rules to text-content string leaves only. parentField is the name of the
+// JSON object key that led to this value (or the parent container's key when
+// traversing array elements); see textContentFields for the allowlist.
+func (e *Engine) redactJSONValue(v interface{}, parentField string) interface{} {
+	switch val := v.(type) {
+	case string:
+		if !textContentFields[parentField] {
+			return val
+		}
 		for _, rule := range e.rules {
 			if !e.agentMode && rule.Mode != ModeTrack {
 				continue
@@ -208,12 +340,12 @@ func (e *Engine) redactJSONValue(v interface{}) interface{} {
 		return val
 	case map[string]interface{}:
 		for k, v2 := range val {
-			val[k] = e.redactJSONValue(v2)
+			val[k] = e.redactJSONValue(v2, k)
 		}
 		return val
 	case []interface{}:
 		for i, v2 := range val {
-			val[i] = e.redactJSONValue(v2)
+			val[i] = e.redactJSONValue(v2, parentField)
 		}
 		return val
 	default:
