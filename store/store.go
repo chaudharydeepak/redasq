@@ -75,7 +75,8 @@ func (s *Store) migrate() error {
 			session_id       TEXT    NOT NULL DEFAULT '',
 			client           TEXT    NOT NULL DEFAULT '',
 			model            TEXT    NOT NULL DEFAULT '',
-			llm_response     TEXT    NOT NULL DEFAULT ''
+			llm_response     TEXT    NOT NULL DEFAULT '',
+			raw_body         TEXT    NOT NULL DEFAULT ''
 		);
 		CREATE TABLE IF NOT EXISTS settings (
 			key   TEXT PRIMARY KEY,
@@ -97,6 +98,7 @@ func (s *Store) migrate() error {
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN client TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN model TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE prompts ADD COLUMN llm_response TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE prompts ADD COLUMN raw_body TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -147,6 +149,16 @@ func (s *Store) UpdateTokens(id int64, inputTokens, outputTokens int) error {
 // UpdateLLMResponse stores the LLM response for a redacted prompt (compliance audit).
 func (s *Store) UpdateLLMResponse(id int64, response string) error {
 	_, err := s.db.Exec(`UPDATE prompts SET llm_response=? WHERE id=?`, response, id)
+	return err
+}
+
+// UpdateRawBody stores the post-redaction request body that was actually
+// forwarded upstream. Used as audit evidence for the history-leak path: when
+// a block-mode value lived only in conversation history, the proxy silently
+// scrubs it before forwarding — operators need byte-level proof that the
+// scrub happened.
+func (s *Store) UpdateRawBody(id int64, body string) error {
+	_, err := s.db.Exec(`UPDATE prompts SET raw_body=? WHERE id=?`, body, id)
 	return err
 }
 

@@ -255,13 +255,45 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 			req.ContentLength = int64(len(redactedBody))
 		}
 
+		// Location-aware history scan. Closes the leak path where a block-mode
+		// value sits in conversation history (typed before the proxy was running,
+		// returned from a tool_result the client retained after a partial block,
+		// embedded in a long-running session that pre-dates this fix) and rides
+		// along on every subsequent forward.
+		//
+		// Strategy: if the current turn has no block-mode match (so the normal
+		// block path won't fire), check the FULL body for block-mode matches.
+		// Any such match is by definition history-only — silently scrub the
+		// matched value from the outbound body, no fresh dashboard alarm. The
+		// user already saw the loud block when this value first hit current turn.
+		// Without this, a session is "poisoned" forever: every API request
+		// re-sends history including the value, and the upstream LLM gets it.
+		var historyBlockMatches []inspector.Match
+		if !p.eng.Inspect(combined).Blocked {
+			fullBody := strings.Join(parsed.FullBody, "\n\n")
+			if fullBody != "" && fullBody != combined {
+				historyResult := p.eng.Inspect(fullBody)
+				if historyResult.Blocked {
+					historyBlockMatches = historyResult.Matches
+					candidate := p.eng.RedactBlockMatchesFromBody(redactedBody)
+					if json.Valid(redactedBody) && !json.Valid(candidate) {
+						log.Printf("warn: history redaction produced invalid JSON body — forwarding existing")
+					} else {
+						redactedBody = candidate
+						req.Body = io.NopCloser(bytes.NewReader(redactedBody))
+						req.ContentLength = int64(len(redactedBody))
+					}
+				}
+			}
+		}
+
 		// Background Copilot requests (title, summary, progress messages) must
 		// never be blocked — their responses surface directly in the chat UI, so
 		// a block response from us appears as a spurious chat message. We still
 		// inspect and redact them; we just don't terminate the connection.
 		allowBlock := !parsed.Background
 
-		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, parsed.UserQuery, redactions, allowBlock, sessionID, client, parsed.Model)
+		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, parsed.UserQuery, redactions, historyBlockMatches, allowBlock, sessionID, client, parsed.Model)
 		if blocked {
 			if strings.Contains(stripPort(hostport), "claude.ai") {
 				writeHTTPError(tlsClient, 400, msg)
@@ -282,6 +314,20 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 			// Store LLM response for compliance when request was redacted (track-mode rules fired).
 			if status == store.StatusRedacted && len(respBytes) > 0 {
 				p.db.UpdateLLMResponse(savedID, ExtractResponseText(respBytes))
+			}
+			// Audit evidence for the history-leak path: when block-mode matches
+			// lived only in conversation history, the proxy silently scrubs them
+			// before forwarding. Persist the post-scrub body so operators can
+			// verify the value was actually removed (current-turn fields like
+			// prompt/redacted_prompt only carry the typed message and won't
+			// reflect history-only redactions).
+			if len(historyBlockMatches) > 0 {
+				const maxRawBodyStore = 512 * 1024
+				body := redactedBody
+				if len(body) > maxRawBodyStore {
+					body = body[:maxRawBodyStore]
+				}
+				p.db.UpdateRawBody(savedID, string(body))
 			}
 		}
 		if err != nil {
@@ -483,22 +529,27 @@ func extractTelemetryInfo(body []byte) (events []string, summary string) {
 
 // inspectAndStore stores every intercepted prompt.
 // redactions are track-mode matches already applied to the forwarded body.
+// historyBlockMatches are block-mode matches found in conversation history
+// (not the current turn). They've already been silently redacted from the
+// outbound body by the caller; here we just record them for dashboard
+// visibility — they NEVER trigger a block, regardless of allowBlock.
 // allowBlock: if false, block-mode rules are recorded but the request is not terminated.
 // Returns (blocked, assistantMessage, savedRowID, status). savedRowID is 0 if nothing was stored.
-func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombined, displayPrompt string, redactions []inspector.Match, allowBlock bool, sessionID, client, model string) (bool, string, int64, store.Status) {
-	if combined == "" && len(redactions) == 0 {
+func (p *proxy) inspectAndStore(req *http.Request, host, combined, redactedCombined, displayPrompt string, redactions []inspector.Match, historyBlockMatches []inspector.Match, allowBlock bool, sessionID, client, model string) (bool, string, int64, store.Status) {
+	if combined == "" && len(redactions) == 0 && len(historyBlockMatches) == 0 {
 		return false, "", 0, store.StatusClean
 	}
 
 	result := p.eng.Inspect(combined)
 
-	// Merge block-mode matches with redactions for storage.
+	// Merge block-mode matches with redactions and history-only block matches for storage.
 	allMatches := append(result.Matches, redactions...)
+	allMatches = append(allMatches, historyBlockMatches...)
 
 	status := store.StatusClean
 	if result.Blocked && allowBlock {
 		status = store.StatusBlocked
-	} else if result.Blocked || len(redactions) > 0 {
+	} else if result.Blocked || len(redactions) > 0 || len(historyBlockMatches) > 0 {
 		status = store.StatusRedacted
 	} else if len(result.Matches) > 0 {
 		status = store.StatusFlagged
@@ -636,6 +687,21 @@ func writeBlockedResponse(conn net.Conn, assistantMsg string, streaming bool, pa
 		return
 	}
 
+	// OpenAI Responses API (`/responses`, `/v1/responses`) — used by Copilot CLI,
+	// Codex, and any client built on the new Responses surface. Different
+	// envelope from chat/completions: top-level `output[]` array of message
+	// items with `output_text` content blocks. Non-Responses clients fall
+	// through to the chat.completion shape below.
+	//
+	// Falling through here is what produced the user-visible "Response was
+	// interrupted due to a server error. Retrying..." spam on Copilot CLI:
+	// the client got a chat.completion envelope it couldn't parse, marked it
+	// as a server error, and retried 5 times before giving up.
+	if strings.Contains(path, "/responses") {
+		writeBlockedResponsesAPI(conn, assistantMsg, streaming)
+		return
+	}
+
 	// OpenAI format (chat/completions and everything else).
 	if streaming {
 		chunkB, _ := json.Marshal(struct {
@@ -710,6 +776,114 @@ func writeBlockedResponse(conn net.Conn, assistantMsg string, streaming bool, pa
 			len(b), b,
 		)
 	}
+}
+
+// writeBlockedResponsesAPI returns an OpenAI Responses API envelope for the
+// blocked case. Used for `/responses` endpoints (Copilot CLI, Codex). The
+// envelope shape differs from chat/completions: top-level `output[]` of
+// message items each carrying `content[]` with `output_text` blocks, plus
+// SSE event types `response.created`, `response.output_text.delta`,
+// `response.completed`.
+func writeBlockedResponsesAPI(conn net.Conn, assistantMsg string, streaming bool) {
+	const respID = "resp_blocked"
+	const itemID = "msg_blocked"
+
+	type outputText struct {
+		Type        string        `json:"type"`
+		Text        string        `json:"text"`
+		Annotations []interface{} `json:"annotations"`
+	}
+	type messageItem struct {
+		Type    string       `json:"type"`
+		ID      string       `json:"id"`
+		Status  string       `json:"status"`
+		Role    string       `json:"role"`
+		Content []outputText `json:"content"`
+	}
+	type usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	}
+	type response struct {
+		ID        string        `json:"id"`
+		Object    string        `json:"object"`
+		CreatedAt int           `json:"created_at"`
+		Status    string        `json:"status"`
+		Model     string        `json:"model"`
+		Output    []messageItem `json:"output"`
+		Usage     usage         `json:"usage"`
+	}
+
+	final := response{
+		ID: respID, Object: "response", Status: "completed", Model: "redasq",
+		Output: []messageItem{{
+			Type: "message", ID: itemID, Status: "completed", Role: "assistant",
+			Content: []outputText{{Type: "output_text", Text: assistantMsg, Annotations: []interface{}{}}},
+		}},
+		Usage: usage{OutputTokens: 1, TotalTokens: 1},
+	}
+
+	if !streaming {
+		b, _ := json.Marshal(final)
+		fmt.Fprintf(conn,
+			"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+			len(b), b,
+		)
+		return
+	}
+
+	// Streaming: emit the standard event sequence. Skeleton for response.created
+	// has empty output; final response.completed carries the populated message.
+	skeleton := response{
+		ID: respID, Object: "response", Status: "in_progress", Model: "redasq",
+		Output: []messageItem{},
+		Usage:  usage{},
+	}
+
+	emit := func(event string, payload interface{}) string {
+		b, _ := json.Marshal(payload)
+		return "event: " + event + "\ndata: " + string(b) + "\n\n"
+	}
+
+	created := emit("response.created", map[string]interface{}{
+		"type": "response.created", "response": skeleton,
+	})
+	itemAdded := emit("response.output_item.added", map[string]interface{}{
+		"type": "response.output_item.added", "output_index": 0,
+		"item": messageItem{Type: "message", ID: itemID, Status: "in_progress", Role: "assistant", Content: []outputText{}},
+	})
+	partAdded := emit("response.content_part.added", map[string]interface{}{
+		"type": "response.content_part.added", "item_id": itemID,
+		"output_index": 0, "content_index": 0,
+		"part": outputText{Type: "output_text", Text: "", Annotations: []interface{}{}},
+	})
+	delta := emit("response.output_text.delta", map[string]interface{}{
+		"type": "response.output_text.delta", "item_id": itemID,
+		"output_index": 0, "content_index": 0, "delta": assistantMsg,
+	})
+	textDone := emit("response.output_text.done", map[string]interface{}{
+		"type": "response.output_text.done", "item_id": itemID,
+		"output_index": 0, "content_index": 0, "text": assistantMsg,
+	})
+	partDone := emit("response.content_part.done", map[string]interface{}{
+		"type": "response.content_part.done", "item_id": itemID,
+		"output_index": 0, "content_index": 0,
+		"part": outputText{Type: "output_text", Text: assistantMsg, Annotations: []interface{}{}},
+	})
+	itemDone := emit("response.output_item.done", map[string]interface{}{
+		"type": "response.output_item.done", "output_index": 0,
+		"item": final.Output[0],
+	})
+	completed := emit("response.completed", map[string]interface{}{
+		"type": "response.completed", "response": final,
+	})
+
+	body := created + itemAdded + partAdded + delta + textDone + partDone + itemDone + completed
+	fmt.Fprintf(conn,
+		"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n%s",
+		body,
+	)
 }
 
 

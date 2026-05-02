@@ -1149,7 +1149,25 @@ function fmtTokens(n) {
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function statusTag(s) { return '<span class="tag tag-'+esc(s)+'">'+esc(s)+'</span>'; }
+function statusTag(s, historyRedacted) {
+  // For history-only redactions, embed a small italic "h" indicator INSIDE
+  // the redacted tag (rather than as a sibling) so it shares the tag's
+  // bounding box. The status <td> has overflow:hidden, which would clip a
+  // sibling badge sitting to the right of the tag — embedding it inside the
+  // tag's existing flex container keeps it within the cell's width budget.
+  if (historyRedacted) {
+    var inner = esc(s)
+      + '<span title="History-only block-mode match — silently scrubbed from outbound body" '
+      + 'style="display:inline-flex;align-items:center;justify-content:center;'
+      + 'margin-left:5px;width:14px;height:14px;border-radius:50%;'
+      + 'font-family:Georgia,serif;font-size:10px;font-style:italic;font-weight:700;'
+      + 'background:#fff;color:#7c3aed;'
+      + 'box-shadow:0 0 0 1px rgba(255,255,255,.6);'
+      + 'cursor:help">h</span>';
+    return '<span class="tag tag-'+esc(s)+'" style="overflow:visible">'+inner+'</span>';
+  }
+  return '<span class="tag tag-'+esc(s)+'">'+esc(s)+'</span>';
+}
 function sevTag(s)    { return s ? '<span class="tag tag-'+esc(s)+'">'+esc(s)+'</span>' : ''; }
 function modeTag(m)   { return '<span class="mm mm-'+esc(m)+'">'+esc(m)+'</span>'; }
 
@@ -1193,11 +1211,23 @@ function toggleDetail(id) {
   var matches = p.matches || [];
   var status  = p.status  || '';
 
+  // Derive: history-only redaction = redacted status, but the user's typed
+  // prompt text wasn't itself redacted (so the match must live in
+  // conversation history, not the current turn). Cheaper than a separate
+  // server flag — same data already flows through.
+  var historyRedacted = status === 'redacted'
+      && matches.length > 0
+      && (!redactedPrompt || redactedPrompt === prompt);
+
   var banner = '';
   if (status === 'blocked') {
     banner = '<div class="banner banner-blocked">⛔ Prompt was blocked — not forwarded to AI</div>';
   } else if (status === 'redacted') {
-    banner = '<div class="banner banner-redacted">✂ Sensitive data was redacted before forwarding to AI</div>';
+    if (historyRedacted) {
+      banner = '<div class="banner banner-redacted">↻ Sensitive data already in conversation history was silently redacted before forwarding (block-mode rule, history-only match)</div>';
+    } else {
+      banner = '<div class="banner banner-redacted">✂ Sensitive data was redacted before forwarding to AI</div>';
+    }
   }
 
   var promptSection;
@@ -1344,9 +1374,16 @@ async function refresh() {
           var modelCell = modelVal
             ? '<td class="mono muted" title="'+esc(modelVal)+'">'+esc(modelVal)+'</td>'
             : '<td class="mono muted" style="color:var(--text-3)">—</td>';
+          // Derive history-only redaction from the data already on the row:
+          // redacted status + at least one rule match + redacted_prompt
+          // unchanged from prompt → the match must live in history, not the
+          // current turn. Saves a server-side flag.
+          var rowHistoryRedacted = p.status === 'redacted'
+              && (p.matches || []).length > 0
+              && (!p.redacted_prompt || p.redacted_prompt === p.prompt);
           return '<tr id="row-'+p.id+'" class="row-'+p.status+'" onclick="toggleDetail('+p.id+')">' +
             '<td class="mono muted"><span style="display:block;font-size:10px;color:var(--text-3);margin-bottom:1px">#'+p.id+'</span>'+esc(p.time)+'</td>' +
-            '<td>'+statusTag(p.status)+agentBadge+'</td>' +
+            '<td>'+statusTag(p.status, rowHistoryRedacted)+agentBadge+'</td>' +
             '<td class="td-host" title="'+esc(p.host)+'">'+esc(p.host)+'</td>' +
             '<td class="mono muted td-path" title="'+esc(p.path)+'">'+esc(shortPath)+'</td>' +
             '<td>'+rulesHTML+'</td>' +

@@ -15,7 +15,8 @@ type Request struct {
 	Model      string   // "model" field from request body
 	Streaming  bool     // true when stream:true
 	SessionID  string   // Anthropic session ID from metadata.user_id
-	Prompts    []string // inspectable text, current turn only (for rule matching)
+	Prompts    []string // inspectable text, current turn only — drives the block decision
+	FullBody   []string // inspectable text, full body (current turn + history + system + instructions) — drives the silent history-redaction
 	UserQuery  string   // user's typed message only (for dashboard display)
 	Background bool     // Copilot internal call (title / summary) — never block
 }
@@ -61,19 +62,32 @@ func ParseRequest(body []byte) *Request {
 	}
 
 	var rawTexts []string
+	var fullBodyTexts []string
 	var queryParts []string
 
-	// System prompt (Anthropic) — always inspect. Clients like Copilot refresh it
-	// on every request with current file context, so secrets can appear at any turn.
+	// System prompt (Anthropic) — always inspect (both current-turn and full-body
+	// scans). Clients like Copilot refresh it on every request with current file
+	// context, so secrets can appear at any turn.
 	if len(env.System) > 0 {
-		rawTexts = append(rawTexts, extractContentText(env.System)...)
+		sysTexts := extractContentText(env.System)
+		rawTexts = append(rawTexts, sysTexts...)
+		fullBodyTexts = append(fullBodyTexts, sysTexts...)
 	}
 
 	// Messages array (Anthropic /v1/messages + OpenAI /v1/chat/completions).
+	//
+	// Two parallel populations with different semantics:
+	//   - Prompts (current turn only) drives the block decision. Re-blocking on
+	//     the same value every turn would make a session unusable after one
+	//     leak — that's the UX trap we deliberately avoid.
+	//   - FullBody (every message) drives the silent history-redaction. A
+	//     block-mode value sitting in conversation history (typed before the
+	//     proxy was running, returned from a tool_result the client retained
+	//     after a partial block, embedded in a long-running session) gets
+	//     scrubbed from the outbound body without raising a fresh dashboard
+	//     alarm. Closes the leak path where a value blocked once persists in
+	//     client-side history and rides along on every subsequent forward.
 	if len(env.Messages) > 0 {
-		// Inspect only the current turn — everything after the last assistant message.
-		// Re-inspecting full history on every turn would re-flag the same value on
-		// every subsequent request.
 		lastAsst := -1
 		for i := len(env.Messages) - 1; i >= 0; i-- {
 			if env.Messages[i].Role == "assistant" {
@@ -81,22 +95,27 @@ func ParseRequest(body []byte) *Request {
 				break
 			}
 		}
-		for i := lastAsst + 1; i < len(env.Messages); i++ {
-			msg := env.Messages[i]
-			rawTexts = append(rawTexts, extractContentText(msg.Content)...)
-			if msg.Role == "user" {
-				if q := userQueryFromContent(msg.Content); q != "" {
-					queryParts = append(queryParts, q)
-				}
-				// Copilot background detection: internal calls (title generation,
-				// summarization, progress) use plain string content with known prefixes.
-				var s string
-				if json.Unmarshal(msg.Content, &s) == nil {
-					t := strings.TrimSpace(s)
-					if strings.HasPrefix(t, "Summarize the following") ||
-						strings.HasPrefix(t, "Please write a brief title") ||
-						strings.HasPrefix(t, "Please generate exactly") {
-						r.Background = true
+		for i, msg := range env.Messages {
+			msgTexts := extractContentText(msg.Content)
+			fullBodyTexts = append(fullBodyTexts, msgTexts...)
+			if i > lastAsst {
+				rawTexts = append(rawTexts, msgTexts...)
+				if msg.Role == "user" {
+					if q := userQueryFromContent(msg.Content); q != "" {
+						queryParts = append(queryParts, q)
+					}
+					// Copilot background detection: internal calls (title generation,
+					// summarization, progress) use plain string content with known prefixes.
+					// Only meaningful on the current turn — historical messages of these
+					// shapes belong to past background calls, not this one.
+					var s string
+					if json.Unmarshal(msg.Content, &s) == nil {
+						t := strings.TrimSpace(s)
+						if strings.HasPrefix(t, "Summarize the following") ||
+							strings.HasPrefix(t, "Please write a brief title") ||
+							strings.HasPrefix(t, "Please generate exactly") {
+							r.Background = true
+						}
 					}
 				}
 			}
@@ -110,9 +129,11 @@ func ParseRequest(body []byte) *Request {
 			// Plain string input.
 			if env.Instructions != "" {
 				rawTexts = append(rawTexts, env.Instructions)
+				fullBodyTexts = append(fullBodyTexts, env.Instructions)
 			}
 			if inputStr != "" {
 				rawTexts = append(rawTexts, inputStr)
+				fullBodyTexts = append(fullBodyTexts, inputStr)
 				queryParts = append(queryParts, userQueryFromString(inputStr))
 			}
 		} else {
@@ -145,24 +166,28 @@ func ParseRequest(body []byte) *Request {
 					}
 				}
 
-				// Instructions are always inspected (Copilot CLI refreshes file context here).
+				// Instructions are always inspected (both current-turn and full-body).
 				if env.Instructions != "" {
 					rawTexts = append(rawTexts, env.Instructions)
+					fullBodyTexts = append(fullBodyTexts, env.Instructions)
 				}
 
 				for i, item := range items {
-					if i > lastAsstPrompt {
-						if item.Type == "function_call_output" {
-							if t := strings.TrimSpace(item.Output); t != "" {
-								rawTexts = append(rawTexts, t)
-							}
-						} else {
-							for _, c := range item.Content {
-								if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
-									rawTexts = append(rawTexts, strings.TrimSpace(c.Text))
-								}
+					var itemTexts []string
+					if item.Type == "function_call_output" {
+						if t := strings.TrimSpace(item.Output); t != "" {
+							itemTexts = append(itemTexts, t)
+						}
+					} else {
+						for _, c := range item.Content {
+							if (c.Type == "input_text" || c.Type == "text") && strings.TrimSpace(c.Text) != "" {
+								itemTexts = append(itemTexts, strings.TrimSpace(c.Text))
 							}
 						}
+					}
+					fullBodyTexts = append(fullBodyTexts, itemTexts...)
+					if i > lastAsstPrompt {
+						rawTexts = append(rawTexts, itemTexts...)
 					}
 					if i > lastAsstQuery && item.Role == "user" {
 						for _, c := range item.Content {
@@ -179,9 +204,11 @@ func ParseRequest(body []byte) *Request {
 	// Legacy top-level prompt field.
 	if env.Prompt != "" {
 		rawTexts = append(rawTexts, env.Prompt)
+		fullBodyTexts = append(fullBodyTexts, env.Prompt)
 	}
 
 	r.Prompts = cleanTexts(rawTexts)
+	r.FullBody = cleanTexts(fullBodyTexts)
 
 	if len(queryParts) > 0 {
 		r.UserQuery = strings.Join(queryParts, "\n\n")
