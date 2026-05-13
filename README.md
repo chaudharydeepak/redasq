@@ -10,6 +10,7 @@
   <a href="#client-notes">Client notes</a> ·
   <a href="#rules">Rules</a> ·
   <a href="#agent-mode">Agent mode</a> ·
+  <a href="#ml-classifier">ML classifier</a> ·
   <a href="#options">Options</a> ·
   <a href="#architecture">Architecture</a>
 </p>
@@ -225,15 +226,89 @@ State persists across restarts. Each request is tagged in the dashboard so you c
 
 ---
 
+## ML classifier (optional)
+
+An optional second-layer detector that runs a small local LLM in parallel with the regex engine. Catches natural-language disclosures regex can't pattern-match (e.g. `my username is alice and the password is hunter`). **Opinion-only** — the verdict is written to the prompt row and shown in the dashboard but never gates the block/forward decision.
+
+### Setup
+
+**1. Install `llama.cpp`**
+
+```bash
+# macOS
+brew install llama.cpp
+
+# Linux — use the official release tarball (most distros don't ship a current package)
+# https://github.com/ggml-org/llama.cpp/releases
+```
+
+**2. Drop a GGUF model**
+
+```bash
+mkdir -p ~/.redasq/models
+curl -L -o ~/.redasq/models/qwen2.5-3b-instruct-q4_k_m.gguf \
+  https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf
+```
+
+The default model path is `~/.redasq/models/qwen2.5-3b-instruct-q4_k_m.gguf`. Point `--ml-model <path>` at a different file to override.
+
+**3. Run redasq normally**
+
+```
+redasq
+# → ml: spawning llama-server with qwen2.5-3b-instruct-q4_k_m.gguf ...
+# → ml: ready at http://127.0.0.1:8765 (model=qwen2.5-3b-instruct-q4_k_m.gguf)
+```
+
+If `llama-server` or the model file is missing, the ML layer is skipped with a one-line hint and redasq continues in regex-only mode.
+
+### Bring your own model (BYOM)
+
+Any instruction-tuned GGUF works — point `--ml-model` at it. Verified alternatives:
+
+| Model | Size (Q4_K_M) | License | Notes |
+|---|---|---|---|
+| Qwen 2.5 3B Instruct | ~2.0 GB | Apache 2.0 | Default; benchmarked |
+| Llama 3.2 3B Instruct | ~2.0 GB | Llama 3 Community | Drop-in replacement |
+| Phi-3.5-mini 3.8B | ~2.4 GB | MIT | Permissive license; good for redistribution |
+| Gemma 2 2B Instruct | ~1.6 GB | Gemma TOS | Smaller; slightly lower accuracy on natural-language disclosures |
+
+Base (non-Instruct) models will fail the JSON-schema constraint and produce parse errors visible with `--debug`.
+
+### Hardware requirements
+
+For the default Qwen 2.5 3B Q4_K_M (~2 GB on disk, ~2.5 GB RAM at runtime):
+
+| Tier | RAM | CPU / GPU | Latency per classification |
+|---|---|---|---|
+| Minimum | 4 GB free | x86_64 + AVX2 (Intel Haswell+, AMD Excavator+) or ARM64 + NEON | 5–10 s |
+| Recommended | 8 GB | 8+ threads, AVX2/AVX-512 | 3–5 s |
+| Optimal | 16 GB | Apple Silicon M2+ with Metal, or NVIDIA GPU with CUDA-built `llama.cpp` | 0.5–1.5 s |
+
+The classifier runs in a background goroutine — slow inference never blocks the user's request. The dashboard ML column shows `—` while the verdict is pending, then fills in when the model returns.
+
+### Disable
+
+```bash
+redasq --no-ml-classifier
+```
+
+---
+
 ## Options
 
 ```
---port            Proxy port (default: 8080)
---web-port        Dashboard port (default: 7778)
---ca-dir          Directory for CA cert, key, and database (default: ~/.redasq)
---upstream-proxy  Chain through a corporate proxy (e.g. http://proxy.corp.com:8080)
---debug           Verbose request/connection logging
---version         Print version and exit
+--port              Proxy port (default: 8080)
+--web-port          Dashboard port (default: 7778)
+--ca-dir            Directory for CA cert, key, and database (default: ~/.redasq)
+--upstream-proxy    Chain through a corporate proxy (e.g. http://proxy.corp.com:8080)
+--debug             Verbose request/connection logging
+--version           Print version and exit
+--no-ml-classifier  Disable the parallel local-LLM classifier
+--ml-binary         Path to llama-server binary (default: looked up in PATH)
+--ml-model          Path to GGUF model (default: ~/.redasq/models/qwen2.5-3b-instruct-q4_k_m.gguf)
+--ml-port           Port for the managed llama-server (default: 8765)
+--ml-threads        Number of threads for llama-server (default: 8)
 ```
 
 ---
@@ -274,6 +349,10 @@ redasq/
 │   ├── engine.go        Rule matching engine (block, redact, track)
 │   ├── rules.go         230 built-in rules
 │   └── config.go        rules.json loading and write-back
+├── mlclassifier/
+│   ├── spawn.go         llama-server child-process lifecycle
+│   ├── client.go        HTTP client for /v1/chat/completions
+│   └── prompt.go        System prompt + JSON schema for disclosure verdict
 ├── store/
 │   └── store.go         SQLite persistence
 └── web/

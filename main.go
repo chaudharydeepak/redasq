@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"syscall"
+	"time"
 
 	"github.com/chaudharydeepak/redasq/inspector"
+	"github.com/chaudharydeepak/redasq/mlclassifier"
 	"github.com/chaudharydeepak/redasq/proxy"
 	"github.com/chaudharydeepak/redasq/store"
 	"github.com/chaudharydeepak/redasq/web"
@@ -25,6 +30,11 @@ func main() {
 	caDir         := flag.String("ca-dir", defaultCADir(), "Directory for CA cert/key and database")
 	upstreamProxy := flag.String("upstream-proxy", "", "Corporate proxy to route outbound traffic through (e.g. http://proxy.corp.com:8080)")
 	debug         := flag.Bool("debug", false, "Enable verbose request/connection logging")
+	noML          := flag.Bool("no-ml-classifier", false, "Disable the parallel local-LLM classifier")
+	mlBinary      := flag.String("ml-binary", mlclassifier.DefaultBinary, "Path to llama-server binary (looked up in PATH if not absolute)")
+	mlModel       := flag.String("ml-model", "", "Path to GGUF model file (default: <ca-dir>/models/"+mlclassifier.DefaultModelFile+")")
+	mlPort        := flag.Int("ml-port", mlclassifier.DefaultPort, "Port for the managed llama-server")
+	mlThreads     := flag.Int("ml-threads", 8, "Number of threads for llama-server")
 	flag.Parse()
 
 	if *showVersion {
@@ -81,10 +91,59 @@ func main() {
 		log.Printf("agent mode: ON (persisted from last run)")
 	}
 
+	// Try to bring up the local-LLM classifier. Failures here are non-fatal —
+	// redasq continues with regex-only behavior and the dashboard shows empty
+	// ml_classification values for new rows.
+	mlClient, mlServer := startMLClassifier(*noML, *mlBinary, *mlModel, *mlPort, *mlThreads, *caDir)
+
+	// Clean shutdown so the spawned llama-server doesn't outlive redasq.
+	// Without this the child gets reparented to launchd / init when redasq
+	// dies and keeps the port + ~2.5 GB resident memory.
+	if mlServer != nil {
+		go shutdownOnSignal(mlServer)
+	}
+
 	web.Version = version
 	printSetup(ca.CertPath, *port, *webPort, *upstreamProxy)
 	web.Start(*webPort, db, eng, filepath.Join(*caDir, "rules.json"))
-	log.Fatal(proxy.Start(*port, ca, db, eng, *upstreamProxy))
+	log.Fatal(proxy.Start(*port, ca, db, eng, *upstreamProxy, mlClient))
+}
+
+// startMLClassifier spawns llama-server unless --no-ml-classifier is set.
+// Missing binary or model logs a hint and returns (nil, nil) so redasq runs
+// in regex-only mode.
+func startMLClassifier(disabled bool, binary, model string, port, threads int, caDir string) (*mlclassifier.Client, *mlclassifier.Spawned) {
+	if disabled {
+		log.Printf("ml: disabled (--no-ml-classifier)")
+		return nil, nil
+	}
+	if model == "" {
+		model = filepath.Join(caDir, "models", mlclassifier.DefaultModelFile)
+	}
+	cfg := mlclassifier.Config{
+		Binary:  binary,
+		Model:   model,
+		Port:    port,
+		Threads: threads,
+	}
+	log.Printf("ml: spawning %s with %s ...", filepath.Base(binary), filepath.Base(model))
+	spawned, err := mlclassifier.Spawn(context.Background(), cfg, 60*time.Second)
+	if err != nil {
+		log.Printf("ml: disabled — %v", err)
+		log.Printf("ml: to enable, install llama.cpp (brew install llama.cpp) and place a GGUF at %s", model)
+		return nil, nil
+	}
+	log.Printf("ml: ready at %s (model=%s, logs=%s)", spawned.URL, spawned.Model, spawned.LogPath)
+	return mlclassifier.New(spawned.URL), spawned
+}
+
+func shutdownOnSignal(spawned *mlclassifier.Spawned) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	<-sigs
+	log.Printf("ml: stopping llama-server ...")
+	_ = spawned.Stop()
+	os.Exit(0)
 }
 
 func defaultCADir() string {

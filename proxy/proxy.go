@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chaudharydeepak/redasq/inspector"
+	"github.com/chaudharydeepak/redasq/mlclassifier"
 	"github.com/chaudharydeepak/redasq/store"
 )
 
@@ -46,6 +48,7 @@ type proxy struct {
 	db            *store.Store
 	eng           *inspector.Engine
 	upstreamProxy string
+	ml            *mlclassifier.Client // nil when ML is disabled
 }
 
 func isTarget(hostport string) bool {
@@ -63,8 +66,9 @@ func isTarget(hostport string) bool {
 
 // Start runs the HTTP proxy on the given port. Blocks until error.
 // upstreamProxy is optional — set to route outbound traffic through a corporate proxy.
-func Start(port int, ca *CA, db *store.Store, eng *inspector.Engine, upstreamProxy string) error {
-	p := &proxy{ca: ca, db: db, eng: eng, upstreamProxy: upstreamProxy}
+// ml is optional — pass nil to disable the parallel ML classifier.
+func Start(port int, ca *CA, db *store.Store, eng *inspector.Engine, upstreamProxy string, ml *mlclassifier.Client) error {
+	p := &proxy{ca: ca, db: db, eng: eng, upstreamProxy: upstreamProxy, ml: ml}
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: p,
@@ -294,6 +298,15 @@ func (p *proxy) mitm(clientConn net.Conn, hostport string) {
 		allowBlock := !parsed.Background
 
 		blocked, msg, savedID, status := p.inspectAndStore(req, hostport, combined, redactedCombined, parsed.UserQuery, redactions, historyBlockMatches, allowBlock, sessionID, client, parsed.Model)
+
+		// Parallel ML classification. Fires for every non-trivial prompt
+		// regardless of block/forward — the verdict is opinion-only in v1
+		// and gets written to the prompt row asynchronously after the model
+		// completes (typically several seconds later). Goroutine outlives
+		// this request; if redasq exits mid-flight the in-flight call is
+		// dropped (next prompt will land in a fresh row).
+		p.kickoffMLClassify(savedID, parsed.UserQuery, parsed.Background)
+
 		if blocked {
 			if strings.Contains(stripPort(hostport), "claude.ai") {
 				writeHTTPError(tlsClient, 400, msg)
@@ -526,6 +539,35 @@ func extractTelemetryInfo(body []byte) (events []string, summary string) {
 	return events, strings.Join(parts, " | ")
 }
 
+
+// kickoffMLClassify dispatches a background goroutine that calls the local
+// generative LLM to classify the user's typed text. The verdict is stored on
+// the prompt row via UpdateMLClassification when the model finishes. Never
+// blocks the request. No-op when ML is disabled, the prompt is empty, or
+// this is a Copilot background call.
+func (p *proxy) kickoffMLClassify(savedID int64, userQuery string, background bool) {
+	if p.ml == nil || savedID == 0 || userQuery == "" || background {
+		return
+	}
+	text := userQuery
+	id := savedID
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		result, err := p.ml.Classify(ctx, text)
+		var blob []byte
+		if err != nil {
+			debugf("ml: classify id=%d: %v", id, err)
+			blob, _ = json.Marshal(mlclassifier.Result{Error: err.Error()})
+		} else {
+			debugf("ml: id=%d sensitive=%v cat=%s %dms", id, result.Sensitive, result.Category, result.LatencyMS)
+			blob, _ = json.Marshal(result)
+		}
+		if uerr := p.db.UpdateMLClassification(id, string(blob)); uerr != nil {
+			log.Printf("ml: store verdict id=%d: %v", id, uerr)
+		}
+	}()
+}
 
 // inspectAndStore stores every intercepted prompt.
 // redactions are track-mode matches already applied to the forwarded body.

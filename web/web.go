@@ -153,6 +153,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 		Client         string            `json:"client"`
 		Model          string            `json:"model"`
 		LLMResponse    string            `json:"llm_response,omitempty"`
+		MLClassification string          `json:"ml_classification,omitempty"`
 	}
 	out := make([]row, 0, len(prompts))
 	for _, p := range prompts {
@@ -187,6 +188,7 @@ func apiPrompts(w http.ResponseWriter, r *http.Request, db *store.Store) {
 			Client:         p.Client,
 			Model:          p.Model,
 			LLMResponse:    truncate(p.LLMResponse, 800),
+			MLClassification: p.MLClassification,
 		})
 	}
 	type response struct {
@@ -697,6 +699,7 @@ var dashboardHTML = `<!DOCTYPE html>
   .pg-tbl th:nth-child(9) { width: 85px; }   /* Session */
   .pg-tbl th:nth-child(10){ width: 160px; }  /* Client */
   .pg-tbl th:nth-child(11){ width: 140px; }  /* Model */
+  .pg-tbl th:nth-child(12){ width: 90px; text-align:center; }  /* ML */
   /* Column headers: tighter letter-spacing, standard Datadog table header style */
   .pg-tbl th { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
                color: var(--text-3); padding: 8px 16px; border-bottom: 1px solid var(--border);
@@ -1046,10 +1049,11 @@ var dashboardHTML = `<!DOCTYPE html>
                 <th>Session</th>
                 <th>Client</th>
                 <th>Model</th>
+                <th title="Local LLM classification (opinion-only)">ML</th>
               </tr>
             </thead>
             <tbody id="prompts-body">
-              <tr class="empty"><td colspan="11">No prompts intercepted yet</td></tr>
+              <tr class="empty"><td colspan="12">No prompts intercepted yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -1170,6 +1174,25 @@ function statusTag(s, historyRedacted) {
 }
 function sevTag(s)    { return s ? '<span class="tag tag-'+esc(s)+'">'+esc(s)+'</span>' : ''; }
 function modeTag(m)   { return '<span class="mm mm-'+esc(m)+'">'+esc(m)+'</span>'; }
+function mlCell(jsonStr) {
+  // Render the ML classifier verdict cell. Empty = pending or disabled.
+  // Parse failures show a muted "?" rather than crashing the row render.
+  if (!jsonStr) return '<td style="text-align:center;color:var(--text-3)" title="ML pending or disabled">—</td>';
+  var v;
+  try { v = JSON.parse(jsonStr); } catch(e) {
+    return '<td style="text-align:center;color:var(--text-3)" title="parse error">?</td>';
+  }
+  if (v.error) {
+    return '<td style="text-align:center;color:#f59e0b;font-size:11px" title="'+esc(v.error)+'">err</td>';
+  }
+  if (v.sensitive) {
+    var cat = v.category || 'sensitive';
+    var tip = 'ML flagged: '+cat+(v.latency_ms ? ' (' + v.latency_ms + 'ms)' : '');
+    return '<td style="text-align:center"><span style="color:#ef4444;font-weight:600;font-size:11px" title="'+esc(tip)+'">'+esc(cat)+'</span></td>';
+  }
+  var tipOk = 'ML clean'+(v.latency_ms ? ' (' + v.latency_ms + 'ms)' : '');
+  return '<td style="text-align:center"><span style="color:var(--text-3);font-size:13px" title="'+esc(tipOk)+'">·</span></td>';
+}
 
 function setFilter(f, btn) {
   currentFilter = f;
@@ -1267,14 +1290,42 @@ function toggleDetail(id) {
       '</div>';
   }
 
+  // ML classifier verdict — opinion-only in v1. Empty until the goroutine
+  // running the local LLM call writes the row back, then sticks.
+  var mlSection = '';
+  if (p.ml_classification) {
+    var mlv;
+    try { mlv = JSON.parse(p.ml_classification); } catch(e) { mlv = null; }
+    if (mlv) {
+      var modelLabel = mlv.model ? esc(mlv.model) : 'local';
+      var lat = mlv.latency_ms ? mlv.latency_ms+'ms' : '';
+      var body;
+      if (mlv.error) {
+        body = '<span style="color:#f59e0b">error:</span> '+esc(mlv.error);
+      } else if (mlv.sensitive) {
+        body = '<span style="color:#ef4444;font-weight:600">flagged</span> · category: '+esc(mlv.category||'sensitive');
+      } else {
+        body = '<span style="color:var(--text-2)">clean</span>';
+      }
+      mlSection =
+        '<div class="detail-section-lbl" style="margin-top:14px;margin-bottom:6px">ML Classifier (opinion-only)</div>' +
+        '<div style="font-size:12px;color:var(--text-2);padding:8px 10px;background:rgba(255,255,255,.02);border-radius:6px">' +
+          body +
+          '<span style="color:var(--text-3);margin-left:10px;font-size:11px">'+
+            esc(modelLabel)+(lat?' · '+esc(lat):'')+
+          '</span>' +
+        '</div>';
+    }
+  }
+
   var detail = document.createElement('tr');
   detail.id = 'detail-'+id;
   detail.className = 'detail-row';
   var td = document.createElement('td');
-  td.colSpan = 11;
+  td.colSpan = 12;
   td.innerHTML =
     '<div class="detail-wrap">' +
-      banner + promptSection + llmSection + tokenInfo +
+      banner + promptSection + llmSection + tokenInfo + mlSection +
       '<div class="detail-section-lbl" style="margin-top:14px;margin-bottom:6px">Matched Rules</div>' +
       '<div class="match-list">'+matchHTML+'</div>' +
     '</div>';
@@ -1332,7 +1383,7 @@ async function refresh() {
     var wasOpen = openRow;
 
     document.getElementById('prompts-body').innerHTML = prompts.length === 0
-      ? '<tr class="empty"><td colspan="11">' +
+      ? '<tr class="empty"><td colspan="12">' +
           (currentFilter !== 'all'
             ? 'No ' + esc(currentFilter) + ' prompts in this time window.'
             : 'No prompts intercepted yet.<br><span style="font-size:12px;font-weight:400">Route your AI traffic through the proxy to start seeing requests here.</span>'
@@ -1400,6 +1451,7 @@ async function refresh() {
             sessionCell +
             clientCell +
             modelCell +
+            mlCell(p.ml_classification) +
             '</tr>';
         }).join('');
 

@@ -1,6 +1,7 @@
-prompt-guard
 *.db
-.prompt-guard/
-prompt-guard-kb.txt
 roadmap.txt
 redasq
+.DS_Store
+REDASQ_KB.md
+*.gguf
+ml-training/models/
